@@ -1,8 +1,8 @@
 // =======================================================================================
 //        SHADOW_MD:  Small Handheld Arduino Droid Operating Wand + MarcDuino
 // =======================================================================================
-//                          Last Revised Date: 10/16/2015
-//                             Version 3.5.1
+//                          Last Revised Date: 10/18/2015
+//                             Version 3.5.2
 //                       Revised By: vint43 / jlvandusen
 //                Inspired by the PADAWAN / KnightShade SHADOW effort
 // =======================================================================================
@@ -50,10 +50,12 @@
 // ---------------------------------------------------------------------------------------
 
 // #define SHADOW_DEBUG      // uncomment this for console DEBUG output
-// #define SHADOW_VERBOSE    // uncomment this for console VERBOSE output
+#define SHADOW_VERBOSE    // uncomment this for console VERBOSE output
 #define COMPASS           // uncomment this for accurate dome to body positioning using 2 LSM303 from Adafruit Technologies
 #define COLLISION         // uncomment this for collision detection and PING ability using 6 IR Sensors R2Sensor System
 #define VOICE             // uncomment this for Voice Recognition and control ability using the EasyVR 2.0 or higher system
+// #define SOUNDDETECTION    // uncomment for sound sensor positioning of the dome
+// #define BTSupport         // uncomment for BT support for programming on serial
 // #define USE_GPS           // uncomment this for GPS use for positioning and waypoint navigation
 // #define USE_LCD           // uncomment this for LCD Support for Navigation and other future options
 // #define COINSLOTS         // uncomment this for coinslot led ability through Marcduino controller
@@ -103,15 +105,17 @@ bool isDebug = true;             // enable disable sensor output
 // ---------------------------------------------------------------------------------------
 //                          Drive / Sensor Controller Settings
 // ---------------------------------------------------------------------------------------
-int marcDuinoBaudRate = 9600;       // Set the baud rate for the communication to Marcduino Panel/Sensor controller
-int GPSBaudRate = 9600;             // Set the baud rate for the communication to Adafruit GPS Sensor
-int motorControllerBaudRate = 9600; // Set the baud rate for the Syren and Sabertooth motor controllers (dome and feet)
-// for packetized options are: 2400, 9600, 19200 and 38400
+// int marcDuinoBaudRate = 9600;        // Set the baud rate for the communication to Marcduino Panel/Sensor controller
+// int GPSBaudRate = 9600;              // Set the baud rate for the communication to Adafruit GPS Sensor
+// int motorControllerBaudRate = 9600;  // Set the baud rate for the Syren and Sabertooth motor controllers (dome and feet)
+// int BTdeviceBaudRate = 9600;         // Set the baud rate for the Bluetooch Client for Arduino
 
+// for packetized options are: 2400, 9600, 19200 and 38400
 #define SYREN_ADDR         129      // Serial Address for Dome Syren
 #define SABERTOOTH_ADDR    128      // Serial Address for Foot Sabertooth
 #define ENABLE_UHS_DEBUGGING 1
 #define TCAADDR           0x70      // Define address of the adafruit multiplexer
+
 
 // ---------------------------------------------------------------------------------------
 //                          Libraries
@@ -134,8 +138,11 @@ Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(2); // Dome Co
 
 #ifdef COLLISION
 #include <Math.h>
-#include <NewPing.h>
 #include <moving_average.h>                       // simple moving average class; for Sonar functionality
+#ifdef BTSupport
+// #include <SoftwareSerial.h>
+#endif
+
 #endif
 
 #ifdef USE_LCD
@@ -143,7 +150,7 @@ Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(2); // Dome Co
 #endif
 
 #ifdef USE_GPS
-#include <SoftwareSerial.h>
+// #include <SoftwareSerial.h>
 #include <waypointClass.h>                        // custom class to manaage GPS waypoints
 #include <Adafruit_GPS.h>                         // GPS
 // #include <SPI.h>                               // Required library to support SD card driver below
@@ -281,6 +288,7 @@ int const automationInterval = 30000;                                 // After 3
 unsigned long lastDecisionTime = 0, DomelastDecisionTime = 0;         // The last time - in millis() - that we made a decision (start)
 bool makedecision = false, autoNavigation = false, Waypointenabled = false;
 
+#ifdef SOUNDDETECTION
 // R2 Turns his dome towards the loudest sound detected!
 int mic1 = 0; // Microphone input on A0                               // Mic input variables
 int mic2 = 0; // Microphone input on A1
@@ -288,7 +296,7 @@ int mic3 = 0; // Microphone input on A2
 int mic4 = 0; // Microphone input on A3
 
 int threshold = 50;                                                   // Noise threshold before changing position
-
+#endif
 
 // =======================================================================================
 //                            R2Sensor LCD Display
@@ -311,9 +319,9 @@ LiquidCrystal_I2C lcd(0x3F, 20, 4);  // Set the LCD I2C address and size (4x20)
 /*
  * We use a adafruit multiplexor to allow the same Compass system to be used on i2c
  * Vin is connected to 5V (on a 3V logic Arduino/microcontroller, use 3.3V)
-    • GND to ground
-    • SCL to I2C clock
-    • SDA to I2C data
+    â€¢ GND to ground
+    â€¢ SCL to I2C clock
+    â€¢ SDA to I2C data
 Then wire up each of the other sensor breakouts to Vin, Ground and use one of the SCn / SDn multiplexed buses: */
 
 #define I2C_ADDRESS_LEFT    0x2       // 0x1 = SHADOW, 0x2 = left, 0x3 = right, 0x4 = dome, 0x5 = center, 0x6 = voice
@@ -363,7 +371,9 @@ unsigned long DriveMillis = 0;
 //  enum { getDirection };              // Case statement for choices of incoming on the MySerial (we can add more later)
 //  const char serialstart = '<';       // Delimiter for first incoming byte otherwise we do not listen.
 //  const char serialfinish = '>';      // Delimiter for last incoming byte otherwise we continue reading
-//  SoftwareSerial mySerial(8, 7);      // digital pins 7 & 8 were used for GPS -> Mved to Serial3
+#ifdef BTSupport
+SoftwareSerial BTSerial(10, 11);        // digital pins 10 & 11 were used BT Serial Connection
+#endif
 //  int whichNumber = getDirection;     // The Compass Direction converted back to float
 // =======================================================================================
 //                          Initialize -  GPS:Navigation Targeting
@@ -425,7 +435,11 @@ void tcaselect(uint8_t i) {         // Used to query and initialize the i2c mult
 
 void setup()  {
   Serial.begin(115200);                                           //Debug Serial for use with USB Debugging
-  // MySerial.begin(115200);                                          // Enable Serial comm from Dome Sensor Controller
+#ifdef BTSupport
+  BTSerial.begin(9600);                                           // Enable Serial comm from BT Connection
+  BTSerial.print("AT+BAUD4");                                     // Set baudrate to 9600
+  BTSerial.print("AT+NAMER2-MCU-HC06");                           // Set the name to R2-MCU-HC06
+#endif
 
 #ifdef COLLISION
   Wire.begin(I2C_ADDRESS_SHADOW);                                 // assign i2c addressing for SHADOW controller
@@ -466,9 +480,9 @@ void setup()  {
   PS3NavFoot->attachOnInit(onInitPS3NavFoot);                // onInitPS3NavFoot is called upon a new connection
   PS3NavDome->attachOnInit(onInitPS3NavDome);
 
-  Serial1.begin(marcDuinoBaudRate);                          // Setup for Serial1:: MarcDuino Dome Control Board
-  Serial2.begin(motorControllerBaudRate);                    // Setup for Serial2:: Motor Controllers - Sabertooth (Feet)
-  Serial3.begin(GPSBaudRate);                                // Setup for Serial3:: Optional AdaFruit GPS Module (waypoint navigation)
+  Serial1.begin(9600);                          // Setup for Serial1:: MarcDuino Dome Control Board
+  Serial2.begin(9600);                    // Setup for Serial2:: Motor Controllers - Sabertooth (Feet)
+  Serial3.begin(9600);                                // Setup for Serial3:: Optional AdaFruit GPS Module (waypoint navigation)
   // Serial3.begin(marcDuinoBaudRate);                       // Setup for Serial3:: MarcDuino body Control Board
   ST->autobaud();                                            // Send the autobaud command to the Sabertooth controller(s).
   ST->setTimeout(10);                                        // DMB:  How low can we go for safety reasons?  multiples of 100ms
@@ -491,7 +505,6 @@ void loop() {
 #ifdef TEST_CONROLLER
   testPS3Controller();                                        // Useful to enable with serial console when having controller issues.
 #endif
-
 
   if ( !readUSB() ) {                                         // LOOP through functions from highest to lowest priority.
     //printOutput();                                          // We have a fault condition that we want to ensure that we do NOT process any controller data!!!
@@ -636,7 +649,7 @@ int readBodyCompass(void) {
   // float heading = (atan2(event.magnetic.y,event.magnetic.x) * 180) / Pi;
   // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
   // Find yours here: http://www.magnetic-declination.com/
-  // Cedar Park, TX: Magnetic declination: 4° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
+  // Cedar Park, TX: Magnetic declination: 4Â° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
   float heading = atan2(event.magnetic.y, event.magnetic.x);
   //    #define DEC_ANGLE 0.069
   //    heading += DEC_ANGLE;
@@ -671,7 +684,7 @@ int readDomeCompass(void) {
   // float heading = (atan2(event.magnetic.y,event.magnetic.x) * 180) / Pi;
   // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
   // Find yours here: http://www.magnetic-declination.com/
-  // Cedar Park, TX: Magnetic declination: 4° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
+  // Cedar Park, TX: Magnetic declination: 4Â° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
 
   float heading = atan2(event.magnetic.y, event.magnetic.x);
   // #define DEC_ANGLE 0.069
@@ -976,12 +989,12 @@ void recenterDomeOnly(void)  {
     if (abs(error) <= HEADING_TOLERANCE)                // if within tolerance, don't turn
       dometurnDirection = 0;
     else if (error < 0)                                 // if error is a negative number, then we assume Dome is less than body number.
-      if abs(error > 180)                               // if error is more than 180 degrees turn left
+      if (abs(error) > 180)                             // if error is more than 180 degrees turn left
         dometurnDirection = -1;
       else
         dometurnDirection = 1;
     else if (error > 0)                                 // if error is a positive number, then we assume Dome is more than body number.
-      if abs(error < 180)                               // if error is less than 180 degrees turn left
+      if (abs(error) < 180)                             // if error is less than 180 degrees turn left
         dometurnDirection = -1;
       else
         dometurnDirection = 1;
@@ -1063,58 +1076,64 @@ void cautiousR2(void)  {
 
 #ifdef COLLISION
 void R2move() {
-  if (state == stateMovingFwd)  {
-    if (distance >= SAFE_DISTANCE)  {
-      if (turnDirection == straight) {
+  if (state == stateMovingFwd)
+  {
+    if (distance >= SAFE_DISTANCE)
+    {
+      if (turnDirection == straight)
+      {
 #ifdef SHADOW_DEBUG
         Serial.println("Distance > SAFE Straight: FAST");
 #endif
         speed = FAST_SPEED;
-      } else  {
-        turnDirection = straight;
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Turning: speed to Normal and set back to Straight");
-#endif
+      } else
+      {
         turnDirection = straight;
         speed = NORMAL_SPEED;
+#ifdef SHADOW_DEBUG
+        Serial.println("Distance > SAFE > Normal and set back to Straight");
+#endif
       }
       return;
     }
 
-    if (distance > TURN_DISTANCE && distance < SAFE_DISTANCE) {
+    if (distance > TURN_DISTANCE && distance < SAFE_DISTANCE)
+    {
       if (turnDirection == straight)
-        speed = NORMAL_SPEED;                                     // not yet time to turn, but slow down
-      else {
-        speed = TURN_SPEED;                                       // we are already turning set to turn speed
+        speed = NORMAL_SPEED;                                       // not yet time to turn, but slow down
+      else
+      {
+        speed = TURN_SPEED;                                         // we are already turning set to turn speed
       }
       return;
     }
-    if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)  { // getting close, time to turn to avoid object
+    if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)      // getting close, time to turn to avoid object
+    {
       speed = TURN_SPEED;
 #ifndef USE_GPS
       switch (turnDirection)  {
         case straight:  {                                           // Straight currently, so start new turn
-            if (distancerightfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
+            if (distancerightfront <= TURN_DISTANCE)                // Right Check against Safe Distance Variable (130cm)
               turnDirection = left;
             else
               turnDirection = right;
             break;
           }
-        case left:  {                                             // if already turning left, try right
-            if (distanceleftfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
+        case left:  {                                               // if already turning left, try right
+            if (distanceleftfront <= TURN_DISTANCE)                 // Right Check against Safe Distance Variable (130cm)
               turnDirection = right;
             else
               turnDirection = left;
             break;
           }
-        case right: {                                             // if already turning right, try left
-            if (distancerightfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
+        case right: {                                               // if already turning right, try left
+            if (distancerightfront <= TURN_DISTANCE)                // Right Check against Safe Distance Variable (130cm)
               turnDirection = left;
             else
               turnDirection = right;
             break;
           }
-      }                                                         // end SWITCH
+      }                                                             // end SWITCH
 #endif
 
 #ifdef USE_GPS
@@ -1155,7 +1174,8 @@ void R2move() {
 #endif
       return;
     }
-    if (distance <  STOP_DISTANCE) {                            // too close, stop and back up
+    if (distance <  STOP_DISTANCE)                              // too close, stop and back up
+    {
       turnDirection = straight;
       speed = 0;
       if (footDriveSpeed == 0)
@@ -1997,6 +2017,7 @@ void domeDrive()
 //                              |         Mic4          |
 //                              |_______________________|
 
+#ifdef SOUNDDETECTION
 void R2soundcheck() {
   mic1 = analogRead(A0);
   mic2 = analogRead(A1);
@@ -2030,6 +2051,7 @@ void R2soundcheck() {
     }
   }
 }
+#endif
 
 void autodomeDrive()  {
   int domeRotationSpeed;
@@ -5865,3 +5887,4 @@ boolean readUSB()
 //        output = ""; // Reset output string
 //    }
 //}
+
