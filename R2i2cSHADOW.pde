@@ -1,8 +1,8 @@
 // =======================================================================================
 //        SHADOW_MD:  Small Handheld Arduino Droid Operating Wand + MarcDuino
 // =======================================================================================
-//                          Last Revised Date: 10/18/2015
-//                             Version 3.5.2
+//                          Last Revised Date: 10/20/2015
+//                             Version 3.5.3
 //                       Revised By: vint43 / jlvandusen
 //                Inspired by the PADAWAN / KnightShade SHADOW effort
 // =======================================================================================
@@ -68,8 +68,8 @@
 String PS3ControllerFootMac = "00:07:04:EC:A5:18";  //Set this to your FOOT PS3 controller MAC address
 String PS3ControllerDomeMAC = "00:06:F5:5A:BD:17";  //Set to a secondary DOME PS3 controller MAC address (Optional)
 
-String PS3ControllerBackupFootMac = "XX";  //Set to the MAC Address of your BACKUP FOOT controller (Optional)
-String PS3ControllerBackupDomeMAC = "00:06:F5:64:60:3E";  //Set to the MAC Address of your BACKUP DOME controller (Optional)
+String PS3ControllerBackupFootMac = "00:06:F5:64:60:3E";  //Set to the MAC Address of your BACKUP FOOT controller (Optional)
+String PS3ControllerBackupDomeMAC = "XX";  //Set to the MAC Address of your BACKUP DOME controller (Optional)
 
 byte drivespeed1 = 70;   //For Speed Setting (Normal): set this to whatever speeds works for you. 0-stop, 127-full speed.
 byte drivespeed2 = 127;  //For Speed Setting (Over Throttle): set this for when needing extra power. 0-stop, 127-full speed.
@@ -113,7 +113,7 @@ bool isDebug = true;             // enable disable sensor output
 // for packetized options are: 2400, 9600, 19200 and 38400
 #define SYREN_ADDR         129      // Serial Address for Dome Syren
 #define SABERTOOTH_ADDR    128      // Serial Address for Foot Sabertooth
-#define ENABLE_UHS_DEBUGGING 1
+#define ENABLE_UHS_DEBUGGING 0
 #define TCAADDR           0x70      // Define address of the adafruit multiplexer
 
 
@@ -140,7 +140,7 @@ Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(2); // Dome Co
 #include <Math.h>
 #include <moving_average.h>                       // simple moving average class; for Sonar functionality
 #ifdef BTSupport
-// #include <SoftwareSerial.h>
+#include <SoftwareSerial.h>
 #endif
 
 #endif
@@ -150,7 +150,7 @@ Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(2); // Dome Co
 #endif
 
 #ifdef USE_GPS
-// #include <SoftwareSerial.h>
+#include <SoftwareSerial.h>
 #include <waypointClass.h>                        // custom class to manaage GPS waypoints
 #include <Adafruit_GPS.h>                         // GPS
 // #include <SPI.h>                               // Required library to support SD card driver below
@@ -447,7 +447,7 @@ void setup()  {
 #endif
 
 #ifdef COMPASS
-  tcaselect(0);                                                   // Initialize the first compass i2c device
+  tcaselect(1);                                                   // Initialize the first compass i2c device
   magbody.enableAutoRange(true);                                  // Enable auto-gain on the body compass
   if (!magbody.begin())  {                                        // Initialize the sensor
     // There was a problem detecting the LSM303 ... check your connections
@@ -457,7 +457,7 @@ void setup()  {
 #endif
 
 #ifdef COMPASS
-  tcaselect(1);                                                   // Initialize the second compass i2c device
+  tcaselect(0);                                                   // Initialize the second compass i2c device
   magdome.enableAutoRange(true);                                  // Enable auto-gain on the dome compass
   if (!magdome.begin())  {                                        // Initialize the sensor
     // There was a problem detecting the LSM303 ... check your connections
@@ -522,17 +522,22 @@ void loop() {
 #ifdef VOICE
   voicecontrol();                             // Check for input from the voice sensor controller (EasyVR over i2c)
 #endif
-  if (autoNavigation) {
-#ifdef USE_GPS                          // Process GPS module if enabled
-    if (GPS.newNMEAreceived())  {           // check for updated GPS information
+  if (autoNavigation) 
+  {
+#ifdef USE_GPS                            // Process GPS module if enabled
+    if (GPS.newNMEAreceived())            // check for updated GPS information
+    {
       if (GPS.parse(GPS.lastNMEA()) )     // if we successfully parse it, update our data fields
         processGPS();
     }
 #endif
 
 #ifdef COMPASS
+  if (magbody.begin())  
+  {
     bodynav = readBodyCompass();              // Get our current heading from Body COMPASS portion of the code
     domenav = readDomeCompass();              // Get our current heading from Dome COMPASS portion of the code
+
 #ifdef SHADOW_VERBOSE
     Serial.print("Domenav: ");
     Serial.println(domenav);
@@ -541,7 +546,9 @@ void loop() {
     Serial.print("Error :");
     Serial.println(error);
 #endif
+  }
 #endif
+
     R2Decision();                               // Randomly perform an action and change it every 30secs
     R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
     calcDesiredTurn();                          // calculate how we would optimatally turn GPS or due to objects
@@ -642,7 +649,7 @@ void calcDesiredTurn(void)  {
 #ifdef COMPASS
 int readBodyCompass(void) {
   sensors_event_t event;                                      // Get and assign the sensor to an event
-  tcaselect(0);
+  tcaselect(1);
   magbody.getEvent(&event);
 
   // Calculate the angle of the vector y,x
@@ -677,7 +684,7 @@ int readBodyCompass(void) {
 #ifdef COMPASS
 int readDomeCompass(void) {
   sensors_event_t event;    // Get and assign the sensor to an even
-  tcaselect(1);             // Connecting direct to the i2c channel instead of the multiplexer
+  tcaselect(0);             // Connecting direct to the i2c channel instead of the multiplexer
   magdome.getEvent(&event);
 
   // Calculate the angle of the vector y,x
@@ -2036,6 +2043,12 @@ void R2soundcheck() {
   if (mic3direction > 360) mic3direction = mic3direction - 360;
   //Test is threshold (50) hurdle met before proceeding
   if (mic1 - mic2 > threshold || mic2 - mic1 > threshold || mic2 - mic3 > threshold || mic3 - mic2 > threshold ||  mic3 - mic1 > threshold ||  mic1 - mic3 > threshold || mic4 - mic3 > threshold || mic3 - mic4 > threshold || mic4 - mic1 > threshold || mic1 - mic4 > threshold)  {
+    #ifdef SHADOW_VERBOSE
+    Serial.print (mic1direction);
+    Serial.print (mic2direction);
+    Serial.print (mic3direction);
+    Serial.println(mic4direction);
+    #endif
     // Sound Direction Algorithm
     if (mic1 > mic2 || mic1 > mic3) {
       domeTargetPosition = mic1direction;  // Turn the dome forward
