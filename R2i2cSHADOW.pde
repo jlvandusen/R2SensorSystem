@@ -1,8 +1,8 @@
 // =======================================================================================
 //        SHADOW_MD:  Small Handheld Arduino Droid Operating Wand + MarcDuino
 // =======================================================================================
-//                          Last Revised Date: 10/20/2015
-//                             Version 3.5.3
+//                          Last Revised Date: 10/25/2015
+//                             Version 3.5.25
 //                       Revised By: vint43 / jlvandusen
 //                Inspired by the PADAWAN / KnightShade SHADOW effort
 // =======================================================================================
@@ -23,14 +23,15 @@
 //         your droid and to validate and test all aspects of your droid control system.
 //
 // =======================================================================================
-//   Note: You will need a Arduino Mega ADK rev3 to run this sketch and up to 4 more arduinos for sensor input
-//   as a normal Arduino (Uno, Duemilanove etc.) doesn't have enough SRAM and FLASH
+//   Note: You will need a Arduino Mega ADK rev3 or DUE to run this sketch and up to 4 more 
+//   arduinos for sensor input.
+//   NOTE: A normal Arduino (Uno, Duemilanove etc.) doesn't have enough SRAM and FLASH
 //
 //   This is written to be a SPECIFIC Sketch - supporting only one type of controller
-//      - PS3 Move Navigation + MarcDuino Dome Controller & Optional Body Panel Controller
-//      - R2Sensor system complete Collision detection and auto pilot of R2
+//      - PS3 Move Navigation + MarcDuino Dome and Body Controller and R2 Sensor System
+//      - R2Sensor system which includes complete collision detection and auto pilot of R2
 //      - Complete i2c library support for compass, sensor and communications
-//      - Voice Control and Recognition using EasyVR 2.0 or higher over i2c
+//      - Voice Control and Recognition using EasyVR 2.0 Shield or higher over i2c
 //   PS3 Bluetooth library - developed by Kristian Lauszus (kristianl@tkjelectronics.com)
 //   For more information visit my blog: http://blog.tkjelectronics.dk/ or
 //
@@ -43,6 +44,18 @@
 //         Please contact DimensionEngineering to get an RMA to flash your firmware
 //         Some place a 10K ohm resistor between S1 & GND on the SyRen 10 itself
 //
+//    EasyVR 2.x or 3.x shield:
+//         Needs a UNO or Duemilanove arduino to work on as its full shield 1.0 compliant
+//         Utilizes the R2 Sensor sketch to communicate over I2C
+//
+//    IR Sensors (PING):
+//         Use the 4 wire sensors with seperate ECHO and TRIG for better comms (HC-04)
+//
+//    I2C Bus:
+//         Uses PINS 20,21 for SCL/SDA on Mega to PINS A4 and A5 on the others.  This allows
+//         all devices to chat across common interface (2 wire) back to the main SHADOW
+//         master controller.  Curren Sensor systems include: Center, Left, Right and voice.
+// 
 // =======================================================================================
 //
 // ---------------------------------------------------------------------------------------
@@ -50,20 +63,27 @@
 // ---------------------------------------------------------------------------------------
 
 // #define SHADOW_DEBUG      // uncomment this for console DEBUG output
-#define SHADOW_VERBOSE    // uncomment this for console VERBOSE output
-#define COMPASS           // uncomment this for accurate dome to body positioning using 2 LSM303 from Adafruit Technologies
+// #define SHADOW_VERBOSE    // uncomment this for console VERBOSE output
+#define PATROL_DEBUG      // uncomment this to test collision detection using sensors and movement (patrol only)
+#define COMPASS
+#define COMPASS_LSM303    // uncomment this for accurate dome to body positioning using 2 LSM303 from Adafruit Technologies
+// #define COMPASS_HMC5883L  // uncomment this for accurate dome to body positioning using 1 LSM303 and 1 HMC5883L from Adafruit Technologies
 #define COLLISION         // uncomment this for collision detection and PING ability using 6 IR Sensors R2Sensor System
 #define VOICE             // uncomment this for Voice Recognition and control ability using the EasyVR 2.0 or higher system
-// #define SOUNDDETECTION    // uncomment for sound sensor positioning of the dome
+#define SOUNDDETECTION    // uncomment for sound sensor positioning of the dome
+#define USE_GPS           // uncomment this for GPS use for positioning and waypoint navigation
 // #define BTSupport         // uncomment for BT support for programming on serial
-// #define USE_GPS           // uncomment this for GPS use for positioning and waypoint navigation
 // #define USE_LCD           // uncomment this for LCD Support for Navigation and other future options
 // #define COINSLOTS         // uncomment this for coinslot led ability through Marcduino controller
 // #define UTILARMS          // uncomment this for utility arm control ability through Marcduino controller
 
+bool isDebug = true;         // enable/disable sensor output from I2C as well as decision making functions
+
+
 // ---------------------------------------------------------------------------------------
 //                        General User Settings
 // ---------------------------------------------------------------------------------------
+
 
 String PS3ControllerFootMac = "00:07:04:EC:A5:18";  //Set this to your FOOT PS3 controller MAC address
 String PS3ControllerDomeMAC = "00:06:F5:5A:BD:17";  //Set to a secondary DOME PS3 controller MAC address (Optional)
@@ -71,17 +91,17 @@ String PS3ControllerDomeMAC = "00:06:F5:5A:BD:17";  //Set to a secondary DOME PS
 String PS3ControllerBackupFootMac = "00:06:F5:64:60:3E";  //Set to the MAC Address of your BACKUP FOOT controller (Optional)
 String PS3ControllerBackupDomeMAC = "XX";  //Set to the MAC Address of your BACKUP DOME controller (Optional)
 
-byte drivespeed1 = 70;   //For Speed Setting (Normal): set this to whatever speeds works for you. 0-stop, 127-full speed.
-byte drivespeed2 = 127;  //For Speed Setting (Over Throttle): set this for when needing extra power. 0-stop, 127-full speed.
+byte drivespeed1 = 70;    // For Speed Setting (Normal): 0-stop, 127-full speed.
+byte drivespeed2 = 127;   // For Speed Setting (Over Throttle): 0-stop, 127-full speed.
 
-byte turnspeed = 75;     // the higher this number the faster it will spin in place, lower - the easier to control.
-// Recommend beginner: 40 to 50, experienced: 50+, I like 75
+byte turnspeed = 75;      // The higher this number the faster it will spin in place, lower - the easier to control.
+                          // Recommend beginner: 40 to 50, experienced: 50+, I like 75
 
-byte domespeed = 95;    // If using a speed controller for the dome, sets the top speed
-// Use a number up to 127
+byte domespeed = 95;      // If using a speed controller for the dome, sets the top speed
+                          // Use a number up to 127
 
-byte ramping = 1;        // Ramping- the lower this number the longer R2 will take to speedup or slow down,
-// change this by increments of 1
+byte ramping = 1;         // Ramping: the lower this number the longer R2 will take to speedup or slow down,
+                          // change this by increments of 1
 
 byte joystickFootDeadZoneRange = 15;  // For controllers that centering problems, use the lowest number with no drift
 byte joystickDomeDeadZoneRange = 10;  // For controllers that centering problems, use the lowest number with no drift
@@ -92,11 +112,7 @@ int invertturnDirection = -1;     // This may need to be set to 1 for some confi
 
 byte domeAutoSpeed = 50;          // Speed used when dome automation is active - Valid Values: 50 - 100
 int time360DomeTurn = 2500;       // milliseconds for dome to complete 360 turn at domeAutoSpeed - Valid Values: 2000 - 8000 (2000 = 2 seconds)
-
-int stickSpeed = 0;               // moved here to be global
-int turnnum = 0;                  // moved here to be global
-
-bool isDebug = true;             // enable disable sensor output
+int turnnum = 0;                  // Used for Turning for motor controller (moved global)
 
 // ---------------------------------------------------------------------------------------
 //               General User Settings
@@ -105,15 +121,15 @@ bool isDebug = true;             // enable disable sensor output
 // ---------------------------------------------------------------------------------------
 //                          Drive / Sensor Controller Settings
 // ---------------------------------------------------------------------------------------
-// int marcDuinoBaudRate = 9600;        // Set the baud rate for the communication to Marcduino Panel/Sensor controller
-// int GPSBaudRate = 9600;              // Set the baud rate for the communication to Adafruit GPS Sensor
-// int motorControllerBaudRate = 9600;  // Set the baud rate for the Syren and Sabertooth motor controllers (dome and feet)
-// int BTdeviceBaudRate = 9600;         // Set the baud rate for the Bluetooch Client for Arduino
+// int marcDuinoBaudRate =        9600;  // Set the baud rate for the communication to Marcduino Panel/Sensor controller
+// int GPSBaudRate =              9600;  // Set the baud rate for the communication to Adafruit GPS Sensor
+// int motorControllerBaudRate =  9600;  // Set the baud rate for the Syren and Sabertooth motor controllers (dome and feet)
+// int BTdeviceBaudRate =         9600;  // Set the baud rate for the Bluetooch Client for Arduino
+// for packetized options are: 2400, 9600, 19200 and 38400 (anything faster not supported)
 
-// for packetized options are: 2400, 9600, 19200 and 38400
 #define SYREN_ADDR         129      // Serial Address for Dome Syren
 #define SABERTOOTH_ADDR    128      // Serial Address for Foot Sabertooth
-#define ENABLE_UHS_DEBUGGING 0
+#define ENABLE_UHS_DEBUGGING 1
 #define TCAADDR           0x70      // Define address of the adafruit multiplexer
 
 
@@ -126,35 +142,51 @@ bool isDebug = true;             // enable disable sensor output
 #include <PS3BT.h>                  // PS3 Bluetooth Support
 #include <Sabertooth.h>             // Motor Controller(s)
 
-#ifdef COMPASS                      // i2c accessible LSM303 on the main arduino and LSM303 in the dome arduino VIA Serial
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_LSM303_U.h>
-
-Adafruit_LSM303_Mag_Unified magbody = Adafruit_LSM303_Mag_Unified(1); // Body Compass sensor
-Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(2); // Dome Compass sensor
-
-#endif
 
 #ifdef COLLISION
-#include <Math.h>
-#include <moving_average.h>                       // simple moving average class; for Sonar functionality
-#ifdef BTSupport
-#include <SoftwareSerial.h>
+  #include <Math.h>
+  #include <moving_average.h>         // simple moving average class; for Sonar functionality
 #endif
 
+#ifdef COMPASS                                                        // Enable COMPASS Configurations
+  #include <Wire.h>
+  #include <Adafruit_Sensor.h>
+
+#ifdef COMPASS_LSM303                                                 // i2c accessible LSM303 on the main arduino and LSM303 in the dome arduino VIA Serial
+  #include <Adafruit_LSM303_U.h>
+  Adafruit_LSM303_Mag_Unified magbody = Adafruit_LSM303_Mag_Unified(1); // Body Compass sensor
+  sensors_event_t magbody_event;
 #endif
+
+#ifdef COMPASS_HMC5883L
+  #include <Adafruit_HMC5883_U.h>                                       // mag sensor
+  Adafruit_HMC5883_Unified compass = Adafruit_HMC5883_Unified(0);   // Dome Compass sensor (non LSM303) NO NEED FOR MULTIPLEXER
+  sensors_event_t compass_event;
+#endif
+
+#ifndef COMPASS_HMC5883L
+  Adafruit_LSM303_Mag_Unified magdome = Adafruit_LSM303_Mag_Unified(0); // Dome Compass sensor
+  sensors_event_t magdome_event;
+#endif
+
+#endif // COMPASS
+
+#ifdef BTSupport
+  #include <SoftwareSerial.h>
+#endif // BTSupport
 
 #ifdef USE_LCD
-#include <LiquidCrystal_I2C.h>                    // LCD library
+  #include <LiquidCrystal_I2C.h>                    // LCD library
 #endif
 
 #ifdef USE_GPS
-#include <SoftwareSerial.h>
-#include <waypointClass.h>                        // custom class to manaage GPS waypoints
-#include <Adafruit_GPS.h>                         // GPS
+  #include <waypointClass.h>                        // custom class to manaage GPS waypoints
+  #include <Adafruit_GPS.h>                         // GPS
 // #include <SPI.h>                               // Required library to support SD card driver below
 // #include <SD.h>                                // Store GPS data to SD card
+#ifndef BTSupport
+  #include <SoftwareSerial.h>
+#endif
 #endif
 
 #ifdef dobogusinclude
@@ -232,68 +264,64 @@ int distance = 0;
 int part, leftfront, rightfront, leftside, rightside, centerfront, centerleft, centerright, leftback, rightback, frontcombined, backcombined;
 int distanceleftfront, distancerightfront, distanceleftside, distancerightside, distanceleftback, distancerightback;
 
-enum States {Stopped, MovingFwd, MovingBck, Turning, Playfull, Waypoint};        //enum state and their status;
-enum state_t {stateStopped, stateMovingFwd, stateMovingBck, stateTurning, statePlayfull, stateWaypoint};
-state_t state;
+enum States {Stopped, MovingFwd, MovingBck, Turning};   //enum state and their status;
+States R2state = Stopped;
 
-#define R2MOVE_LEFT -50                          // Sets for turnnum talks to sabertooth controller (negative is left)
-#define R2MOVE_RIGHT 50                          // Sets for turnnum talks to sabertooth controller (positive is right)
-#define R2MOVE_STRAIGHT 0                        // Sets for turnnum talks to sabertooth controller (neutral is straight)
+enum Modes {None, Aware, Sleep, Playfull, Waypoint, Following, Searching, Patroling};   //enum modes and their status;
+Modes R2mode = Aware;
+
+enum Status {Home,Turn,Ready,Error}; // enum status of Dome
+Status R2domeStatus = Home;
+
+
+#define R2MOVE_LEFT       -25                    // Sets for turnnum talks to sabertooth controller (negative is left)
+#define R2MOVE_RIGHT       25                    // Sets for turnnum talks to sabertooth controller (positive is right)
+#define R2MOVE_STRAIGHT    0                     // Sets for turnnum talks to sabertooth controller (neutral is straight)
 
 enum directions {left = R2MOVE_LEFT, right = R2MOVE_RIGHT, straight = R2MOVE_STRAIGHT} ;
 directions turnDirection = straight;
 
-#define FAST_SPEED -127                          // Speeds (range: -127 to 127) where negative is forward and positive is backwards
-#define NORMAL_SPEED -75
-#define TURN_SPEED -50
-#define SLOW_SPEED -25
+#define FAST_SPEED        -90                    // Speeds (range: -127 to 127) where negative is forward and positive is backwards
+#define NORMAL_SPEED      -65
+#define TURN_SPEED        -50
+#define SLOW_SPEED        -25
 int speed = NORMAL_SPEED;
 
-#define RUN_TIME 30                              // This function needs to return true after 30 seconds have passed or false otherwise
-#define SAFE_DISTANCE 130                        // distance to obstacle in centimeters returned from the sensor controller
-#define TURN_DISTANCE 91
-#define STOP_DISTANCE 24
-#define MAX_DISTANCE 250                         // maximum distance to track with sensor once it returns from the controller
+// Uncomment for testing sensor readouts and judgements
+#define SAFE_DISTANCE     160                    // distance to obstacle in centimeters returned from the sensor controller
+#define TURN_DISTANCE     110                    // distance to obstacle that is less will result in turn state
+#define FOLLOW_DISTANCE    70                    // distance to target with R2 is following
+#define STOP_DISTANCE      55                    // distance to target with R2 stopping
+#define MAX_DISTANCE      250                    // maximum distance to track with sensor once it returns from the controller
 
-MovingAverage<int, 3> sonarLeftFrontAverage(MAX_DISTANCE);       // moving average of last n pings for Left Front
+// Uncomment for LIVE use
+//#define SAFE_DISTANCE     200                    // distance to obstacle in centimeters returned from the sensor controller
+//#define TURN_DISTANCE     160                    // distance to obstacle that is less will result in turn state
+//#define FOLLOW_DISTANCE   120                    // distance to target with R2 is following
+//#define STOP_DISTANCE      90                    // distance to target with R2 stopping
+//#define MAX_DISTANCE      300                    // maximum distance to track with sensor once it returns from the controller
+
+MovingAverage<int, 3> sonarLeftFrontAverage(MAX_DISTANCE);       // moving average of last n pings for all 3 sensors
 MovingAverage<int, 3> sonarRightFrontAverage(MAX_DISTANCE);      // initialize at MAX_DISTANCE
 MovingAverage<int, 3> sonarLeftSideAverage(MAX_DISTANCE);
 MovingAverage<int, 3> sonarRightSideAverage(MAX_DISTANCE);
 MovingAverage<int, 3> sonarLeftBackAverage(MAX_DISTANCE);
 MovingAverage<int, 3> sonarRightBackAverage(MAX_DISTANCE);
 
-bool movingfwd() {
-  return (state == stateMovingFwd);  // Quick methods for setting each state to true by calling the subroutine
-}
-bool movingbck() {
-  return (state == stateMovingBck);  // Example: moving(); or turning ();...
-}
-bool turning() {
-  return (state == stateTurning);
-}
-bool stopped() {
-  return (state == stateStopped);
-}
-bool playfull() {
-  return (state == statePlayfull);
-}
-bool waypoint() {
-  return (state == stateWaypoint);
-}
 
 // =======================================================================================
 //                            R2Sensor Variables
 // =======================================================================================
 int const automationInterval = 30000;                                 // After 30 seconds, make a decision or change decisions
-unsigned long lastDecisionTime = 0, DomelastDecisionTime = 0;         // The last time - in millis() - that we made a decision (start)
+unsigned long lastDecisionTime = 0;         // The last time - in millis() - that we made a decision (start)
 bool makedecision = false, autoNavigation = false, Waypointenabled = false;
 
-#ifdef SOUNDDETECTION
-// R2 Turns his dome towards the loudest sound detected!
-int mic1 = 0; // Microphone input on A0                               // Mic input variables
-int mic2 = 0; // Microphone input on A1
-int mic3 = 0; // Microphone input on A2
-int mic4 = 0; // Microphone input on A3
+                                                                      // R2 Turns his dome towards the loudest sound detected!
+#ifdef SOUNDDETECTION                                                 // Mic input variables
+int mic1 = 0;                                                         // Microphone input on A0                               
+int mic2 = 0;                                                         // Microphone input on A1
+int mic3 = 0;                                                         // Microphone input on A2
+int mic4 = 0;                                                         // Microphone input on A3
 
 int threshold = 50;                                                   // Noise threshold before changing position
 #endif
@@ -303,14 +331,14 @@ int threshold = 50;                                                   // Noise t
 // =======================================================================================
 
 #ifdef USE_LCD
-LiquidCrystal_I2C lcd(0x3F, 20, 4);  // Set the LCD I2C address and size (4x20)
+LiquidCrystal_I2C lcd(0x3F, 20, 4);   // Set the LCD I2C address and size (4x20)
 #define LEFT_ARROW 0x7F
 #define RIGHT_ARROW 0x7E
 #define DEGREE_SYMBOL 0xDF
-//char lcd_buffer[20];
-//PString message(lcd_buffer, sizeof(lcd_buffer));    // holds message we display on line 4 of LCD
 #endif
-
+                                      // char lcd_buffer[20];
+                                      // PString message(lcd_buffer, sizeof(lcd_buffer));    
+                                      // holds message we display on line 4 of LCD
 #endif
 
 // =======================================================================================
@@ -319,9 +347,9 @@ LiquidCrystal_I2C lcd(0x3F, 20, 4);  // Set the LCD I2C address and size (4x20)
 /*
  * We use a adafruit multiplexor to allow the same Compass system to be used on i2c
  * Vin is connected to 5V (on a 3V logic Arduino/microcontroller, use 3.3V)
-    â€¢ GND to ground
-    â€¢ SCL to I2C clock
-    â€¢ SDA to I2C data
+    GND to ground
+    SCL to I2C clock
+    SDA to I2C data
 Then wire up each of the other sensor breakouts to Vin, Ground and use one of the SCn / SDn multiplexed buses: */
 
 #define I2C_ADDRESS_LEFT    0x2       // 0x1 = SHADOW, 0x2 = left, 0x3 = right, 0x4 = dome, 0x5 = center, 0x6 = voice
@@ -330,7 +358,7 @@ Then wire up each of the other sensor breakouts to Vin, Ground and use one of th
 #define I2C_ADDRESS_CENTER  0x5       // 0x1 = SHADOW, 0x2 = left, 0x3 = right, 0x4 = dome, 0x5 = center, 0x6 = voice
 #define I2C_ADDRESS_VOICE   0x6       // 0x1 = SHADOW, 0x2 = left, 0x3 = right, 0x4 = dome, 0x5 = center, 0x6 = voice
 #define I2C_ADDRESS_SHADOW  0x1       // 0x1 = SHADOW, 0x2 = left, 0x3 = right, 0x4 = dome, 0x5 = center, 0x6 = voice
-#define I2C_ADDRESS_TCAADDR 0x70      // Define address of the adafruit multiplexer
+#define I2C_ADDRESS_TCAADDR 0x70      // Defined address of the adafruit multiplexer
 
 
 
@@ -339,17 +367,26 @@ Then wire up each of the other sensor breakouts to Vin, Ground and use one of th
 // =======================================================================================
 
 #ifdef COMPASS
-int currentHeading;                 // where we are actually facing now
-int headingError;                   // signed (+/-) difference between targetHeading and currentHeading
-int targetHeading;                  // where we want to go to reach current waypoint
-float error;                        // offset number between dome and body compass
-float  domenav, bodynav;            // Assigned variable for body and dome Directions
+int headingError;                     // signed (+/-) difference between GPS and body compass 
+int currentHeading;                   // where we are actually facing now
+int targetHeading;                    // where we want to go to reach current waypoint
+float viewError;                      // signed (+/-) difference between dome and body compass
+float  domenav, bodynav;              // sssigned variable for body and dome Directions
 #endif
 
-// GPS Navigation
-#define GPSECHO false                 // set to TRUE for GPS debugging if needed
-//#define GPSECHO true                // set to TRUE for GPS debugging if needed
-#define HEADING_TOLERANCE 5           // tolerance +/- (in degrees) within which we don't attempt to turn to intercept targetHeading with R2 Dome or R2 Body
+enum { getDirection };              // Case statement for choices of incoming on the MySerial (we can add more later)
+const char serialstart = '<';       // Delimiter for first incoming byte otherwise we do not listen.
+const char serialfinish = '>';      // Delimiter for last incoming byte otherwise we continue reading
+int whichNumber = getDirection;     // The Compass Direction converted back to float
+
+// =======================================================================================
+//              R2Sensor Bluetooth Support for Debuging through Android or Mobile device
+// =======================================================================================
+
+#ifdef BTSupport
+SoftwareSerial BTSerial(10, 11);        // digital pins 10 & 11 were used BT Serial Connection
+#endif
+
 
 // =======================================================================================
 //                            Dome Automation Variables
@@ -363,27 +400,25 @@ unsigned long domeStartTurnTime = 0;  // millis() when next turn should start
 int domeStatus = 0;  // 0 = stopped, 1 = prepare to turn, 2 = turning
 byte action = 0;
 unsigned long DriveMillis = 0;
+unsigned long DomelastDecisionTime = 0; // millis() when last recenter occured
 
 
 // =======================================================================================
 //                          Main Program
 // =======================================================================================
-//  enum { getDirection };              // Case statement for choices of incoming on the MySerial (we can add more later)
-//  const char serialstart = '<';       // Delimiter for first incoming byte otherwise we do not listen.
-//  const char serialfinish = '>';      // Delimiter for last incoming byte otherwise we continue reading
-#ifdef BTSupport
-SoftwareSerial BTSerial(10, 11);        // digital pins 10 & 11 were used BT Serial Connection
-#endif
-//  int whichNumber = getDirection;     // The Compass Direction converted back to float
+
+
+
+
 // =======================================================================================
 //                          Initialize -  GPS:Navigation Targeting
 // =======================================================================================
 #ifdef USE_GPS
 #define GPSECHO false               // set to TRUE for GPS debugging if needed
 //#define GPSECHO true              // set to TRUE for GPS debugging if needed
+SoftwareSerial mySerial(8, 7);    // digital pins 7 & 8
 
-
-Adafruit_GPS GPS(&Serial3);
+Adafruit_GPS GPS(&mySerial);
 boolean usingInterrupt = false;
 float currentLat,
       currentLong,
@@ -392,9 +427,8 @@ float currentLat,
 int distanceToTarget,               // current distance to target (current waypoint)
     originalDistanceToTarget;       // distance to original waypoint when we started navigating to it
 
-// =======================================================================================
-//                          Initialize -  GPS:Waypoint Navigiation
-// =======================================================================================
+// GPS and COMPASS Navigation
+#define HEADING_TOLERANCE 5           // tolerance +/- (in degrees) within which we don't attempt to turn to intercept targetHeading with R2 Dome or R2 Body
 
 // Waypoints
 #define WAYPOINT_DIST_TOLERANCE  5    // tolerance in meters to waypoint; once within this tolerance, will advance to the next waypoint
@@ -408,93 +442,161 @@ waypointClass waypointList[NUMBER_WAYPOINTS] =
   waypointClass(30.508518, -97.832665)
 };
 
-#endif
-
-// Interrupt is called once a millisecond, looks for any new GPS data, and stores it
-#ifdef USE_GPS
-SIGNAL(TIMER0_COMPA_vect) {
-  GPS.read();
-}
+SIGNAL(TIMER0_COMPA_vect)             // Interrupt is called once a millisecond, looks for any new GPS data, and stores it
+  {
+    GPS.read();
+  }
 #endif
 
 // =======================================================================================
 //                          Initialize - i2c multiplexer
 // =======================================================================================
 
+#ifndef COMPASS_HMC5883L
 void tcaselect(uint8_t i) {         // Used to query and initialize the i2c multiplexer board (provide an ID).
   if (i > 7) return;
   Wire.beginTransmission(TCAADDR);
   Wire.write(1 << i);
   Wire.endTransmission();
 }
-
+#endif
 
 // =======================================================================================
 //                          Initialize - Setup Function
 // =======================================================================================
 
 void setup()  {
-  Serial.begin(115200);                                           //Debug Serial for use with USB Debugging
-#ifdef BTSupport
+  Serial.begin(115200);                                           //Debug Serial for use with USB Debugging                                   // Setup Watchdog for 3sec delays
+  #ifdef BTSupport
   BTSerial.begin(9600);                                           // Enable Serial comm from BT Connection
   BTSerial.print("AT+BAUD4");                                     // Set baudrate to 9600
   BTSerial.print("AT+NAMER2-MCU-HC06");                           // Set the name to R2-MCU-HC06
-#endif
+  #endif
 
-#ifdef COLLISION
+  #ifdef COLLISION
   Wire.begin(I2C_ADDRESS_SHADOW);                                 // assign i2c addressing for SHADOW controller
   Wire.onReceive(receiveI2C);                                     // if data is sent over i2c recieve it using this subroutine.
-#endif
+  pinMode(20, INPUT_PULLUP); // Enable internal pull-up resistor on pin 20
+  pinMode(21, INPUT_PULLUP); // Enable internal pull-up resistor on pin 21
+  #endif
 
-#ifdef COMPASS
+// =============================== BODY COMPASS INITIALIZE ==============================================
+
+  #ifdef COMPASS
   tcaselect(1);                                                   // Initialize the first compass i2c device
   magbody.enableAutoRange(true);                                  // Enable auto-gain on the body compass
   if (!magbody.begin())  {                                        // Initialize the sensor
     // There was a problem detecting the LSM303 ... check your connections
     Serial.println("BODY: Ooops, no LSM303 detected ... Check your wiring!");
-    // while(1);
+    //while(1);
   }
-#endif
+  #endif
 
-#ifdef COMPASS
+// =============================== DOME COMPASS INITIALIZE ==============================================
+
+  #ifdef COMPASS
+  #ifdef COMPASS_HMC5883L
+  if(!compass.begin())
+  {
+  Serial.println("DOME: Ooops, no HMC5883L detected ... Check your wiring!");
+  }
+  #endif
+  #ifndef COMPASS_HMC5883L
   tcaselect(0);                                                   // Initialize the second compass i2c device
   magdome.enableAutoRange(true);                                  // Enable auto-gain on the dome compass
-  if (!magdome.begin())  {                                        // Initialize the sensor
+  if (!magdome.begin())                                           // Initialize the sensor
+  {
     // There was a problem detecting the LSM303 ... check your connections
     Serial.println("DOME: Ooops, no LSM303 detected ... Check your wiring!");
-    // while(1);
+    R2domeStatus = Error;                                         // Set the state for Dome to Error
+    //while(1);
   }
+  #endif
+  #endif
+
+// =============================== BODY COMPASS Get Readings ==============================================
+
+  #ifdef COMPASS
+  tcaselect(1);
+  if (magbody.begin())  
+  {
+    bodynav = readBodyCompass();  // Get our current heading from Body COMPASS portion of the code
+    if (isDebug)  
+    {
+      Serial.print("Bodynav: ");
+      Serial.println(bodynav);
+    }
+  }
+  else
+  {
+    if (isDebug)  
+      Serial.println("Body Compass not found ");
+    R2domeStatus = Error;
+  }
+  
+// =============================== DOME COMPASS Get Readings ==============================================
+#ifndef COMPASS_HMC5883L
+  tcaselect(0);
+  if (magdome.begin())  
+  {
+    domenav = readDomeCompass();  // Get our current heading from Dome COMPASS portion of the code
+    if (isDebug)  
+    {
+      Serial.print("Domenav: ");
+      Serial.println(domenav);
+    }
+    R2domeStatus = Ready;
+  } 
 #endif
+#ifdef COMPASS_HMC5883L
+  if (compass.begin())  
+  {
+    domenav = readDomeCompass();  // Get our current heading from Dome COMPASS portion of the code
+    if (isDebug)  
+    {
+      Serial.print("Domenav: ");
+      Serial.println(domenav);
+    }
+    R2domeStatus = Ready;
+  } 
+#endif
+  else
+  {
+  if (isDebug)  
+    Serial.println("Dome Compass not found ");
+  R2domeStatus = Error; // Set the state for Dome to Error
+  }
+  
+  if (R2domeStatus == Ready)
+    viewError = domenav - bodynav;  // calculate which way to turn the dome to intercept the difference (if compass is ready)
+
+  #endif
 
   while (!Serial);
   if (Usb.Init() == -1) {
-    Serial.print(F("\r\n (Bluetooth)OSC did not start"));       // Error check USB dongle for exists/working
+    Serial.print(F("\r\n (Bluetooth)OSC did not start"));     // Error check USB dongle for exists/working
     while (1); //halt
   }
-
   Serial.print(F("\r\nBluetooth Library Started"));
 
-  //output.reserve(200);                                          // JLV: Not Needed Conserve on SRAM ... Reserve 200 bytes for the output string
-
   //Setup for PS3
-  PS3NavFoot->attachOnInit(onInitPS3NavFoot);                // onInitPS3NavFoot is called upon a new connection
+  PS3NavFoot->attachOnInit(onInitPS3NavFoot);                 // onInitPS3NavFoot is called upon a new connection
   PS3NavDome->attachOnInit(onInitPS3NavDome);
 
-  Serial1.begin(9600);                          // Setup for Serial1:: MarcDuino Dome Control Board
-  Serial2.begin(9600);                    // Setup for Serial2:: Motor Controllers - Sabertooth (Feet)
-  Serial3.begin(9600);                                // Setup for Serial3:: Optional AdaFruit GPS Module (waypoint navigation)
-  // Serial3.begin(marcDuinoBaudRate);                       // Setup for Serial3:: MarcDuino body Control Board
-  ST->autobaud();                                            // Send the autobaud command to the Sabertooth controller(s).
-  ST->setTimeout(10);                                        // DMB:  How low can we go for safety reasons?  multiples of 100ms
+  Serial1.begin(9600);                                        // Setup for Serial1:: MarcDuino Dome Control Board
+  Serial2.begin(9600);                                        // Setup for Serial2:: Motor Controllers - Sabertooth (Feet)
+  Serial3.begin(9600);                                        // Setup for Serial3:: Optional AdaFruit GPS Module (waypoint navigation)
+                                                              // Setup for Serial3:: MarcDuino body Control Board
+  ST->autobaud();                                             // Send the autobaud command to the Sabertooth controller(s).
+  ST->setTimeout(10);                                         // DMB:  How low can we go for safety reasons?  multiples of 100ms
   ST->setDeadband(driveDeadBandRange);
   ST->stop();
   SyR->autobaud();
-  SyR->setTimeout(20);                                       // DMB:  How low can we go for safety reasons?  multiples of 100ms
+  SyR->setTimeout(20);                                        // DMB:  How low can we go for safety reasons?  multiples of 100ms
   SyR->stop();
 
-  randomSeed(analogRead(0));                                 // random number seed for dome automation
+  randomSeed(analogRead(0));                                  // random number seed for dome automation
 
-  state = stateStopped;
 }
 
 // =======================================================================================
@@ -503,60 +605,32 @@ void setup()  {
 
 void loop() {
 #ifdef TEST_CONROLLER
-  testPS3Controller();                                        // Useful to enable with serial console when having controller issues.
+  testPS3Controller();                          // Useful to enable with serial console when having controller issues.
 #endif
 
-  if ( !readUSB() ) {                                         // LOOP through functions from highest to lowest priority.
-    //printOutput();                                          // We have a fault condition that we want to ensure that we do NOT process any controller data!!!
+  if ( !readUSB() ) {                           // LOOP through functions from highest to lowest priority.
+    //printOutput();                            // We have a fault condition that we want to ensure that we do NOT process any controller data!!!
     return;
   }
-  footMotorDrive();                                           // Check to see if there is PS3 Controller input (Manual Control)
-  domeDrive();                                                // Check to see if there is PS3 Controller input (Manual Control)
-  marcDuinoDome();                                            // Check for input to control servos and sound in the Dome Controller
-  marcDuinoFoot();
-  toggleSettings();
+  footMotorDrive();                             // Check to see if there is PS3 Controller input (Manual Control)
+  domeDrive();                                  // Check to see if there is PS3 Controller input (Manual Control)
+  marcDuinoDome();                              // Check for input to control servos and sound in the Dome Controller
+  marcDuinoFoot();                              // Check for input to control servos and sound in the Foot Controller
+  toggleSettings();                             // Enable / Disable settings through controller combinations
 
-#ifdef COLLISION                            // If we have the R2Sensor Controller installed and auto navigation is enabled
-  recenterDomeOnly();                         // If its been 30 secs and the dome does not match body - recenter dome
-
-#ifdef VOICE
-  voicecontrol();                             // Check for input from the voice sensor controller (EasyVR over i2c)
-#endif
-  if (autoNavigation) 
+#ifdef COLLISION                                // If we have the R2Sensor Controller installed and auto navigation is enabled
+  if (autoNavigation)
   {
-#ifdef USE_GPS                            // Process GPS module if enabled
-    if (GPS.newNMEAreceived())            // check for updated GPS information
-    {
-      if (GPS.parse(GPS.lastNMEA()) )     // if we successfully parse it, update our data fields
-        processGPS();
-    }
-#endif
-
-#ifdef COMPASS
-  if (magbody.begin())  
-  {
-    bodynav = readBodyCompass();              // Get our current heading from Body COMPASS portion of the code
-    domenav = readDomeCompass();              // Get our current heading from Dome COMPASS portion of the code
-
-#ifdef SHADOW_VERBOSE
-    Serial.print("Domenav: ");
-    Serial.println(domenav);
-    Serial.print("Bodynav: ");
-    Serial.println(bodynav);
-    Serial.print("Error :");
-    Serial.println(error);
-#endif
-  }
-#endif
-
+    #ifdef VOICE
+      voicecontrol();                           // Check for input from the voice sensor controller (EasyVR over i2c)
+    #endif
+    // recenterDomeOnly();                      // If its been 30 secs and the dome does not match body - recenter dome
     R2Decision();                               // Randomly perform an action and change it every 30secs
-    R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
-    calcDesiredTurn();                          // calculate how we would optimatally turn GPS or due to objects
-    R2move();                           // If autoNavigation is true, begin moving R2
+    R2States();                                 // If autoNavigation is true, begin moving R2
   }
 #endif
-
-  if (runningCustRoutine)                     // If running a custom MarcDuino Panel Routine - Call Function
+  
+  if (runningCustRoutine)                       // If running a custom MarcDuino Panel Routine - Call Function
   {
     custMarcDuinoPanel();
   }
@@ -580,58 +654,122 @@ void loop() {
 // =======================================================================================
 
 // =======================================================================================
-//           R2Sensor Calculate Turning from obstacles calcDesiredTurn()
+//           R2Sensor Status Checks and verification
 // =======================================================================================
 #ifdef COLLISION
-void calcDesiredTurn(void)  {
-  if (Waypointenabled)  {
-    // calculate where we need to turn to head to destination
-    headingError = targetHeading - bodynav;
-    // adjust for compass wrap
-    if (headingError < -180)
-      headingError += 360;
-    if (headingError > 180)
-      headingError -= 360;
 
-    // calculate which way to turn to intercept the targetHeading
-    if (abs(headingError) <= HEADING_TOLERANCE)      // if within tolerance, don't turn
-      turnDirection = straight;
-    else if (headingError < 0)
-      turnDirection = left;
-    else if (headingError > 0)
-      turnDirection = right;
-    else
-      turnDirection = straight;
-  } else {
-    if (distance < TURN_DISTANCE)  {
-      if (distanceleftfront > distancerightfront)
-        turnDirection = left;
-      else if (distanceleftfront < distancerightfront)
-        turnDirection = right;
-    } else
-      turnDirection = straight;
+void R2States()
+{
+// ============================== States =================================================
+  if (R2state == MovingFwd)
+  {
+    R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
   }
-#ifdef SHADOW_VERBOSE
-  Serial.println("DISTANCE,LEFR,RIFR,LESI,RISI,LEBA,RIBA: ");
-  Serial.print(distance);
-  Serial.print(",");
-  Serial.print(distanceleftfront);
-  Serial.print(",");
-  Serial.print(distancerightfront);
-  Serial.print(",");
-  Serial.print(distanceleftside);
-  Serial.print(",");
-  Serial.print(distancerightside);
-  Serial.print(",");
-  Serial.print(distanceleftback);
-  Serial.print(",");
-  Serial.println(distancerightback);
-  Serial.print("direction: ");
-  Serial.println(turnDirection);
-  Serial.print("Voice Command: ");
-  Serial.println(voicecmd);
-#endif
-  // return (turnDirection);                        // Idea would be to ask then whenever
+  else if (R2state == MovingBck)
+  {
+    R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
+  }
+  else if (R2state == Turning)
+  {
+    R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
+  }
+  else if (R2state == Stopped)
+  {
+    
+  }
+// =============================== Modes =================================================
+  if (R2mode == Patroling)
+  {
+    autoNavigation = true;                      // Engage Autonavigation bypassing throttle controls from joysticks
+    R2Patrol();
+  }
+  else if (R2mode == Waypoint)
+  {
+    #ifdef USE_GPS                              // Process GPS module if enabled
+    if (GPS.newNMEAreceived())                  // check for updated GPS information
+    {
+      if (GPS.parse(GPS.lastNMEA()) )           // if we successfully parse it, update our data fields
+      processGPS();
+    }
+    #endif
+    
+    autoNavigation = true;                      // Engage Autonavigation bypassing throttle controls from joysticks
+    R2Sensors();                                // Calculate Sensor readings from Ping Sensors Front left and right
+    calcDesiredTurn();                          // calculate how we would optimatally turn GPS or due to objects
+    R2Waypointnav();                            // Move R2 Forward towards the waypoints watching for obstructions
+  }
+  else if (R2mode == Aware)
+  {
+    
+  }
+  else if (R2mode == Sleep)
+  {
+    
+  }
+  else if (R2mode == Playfull)
+  {
+    autoNavigation = true;      // Engage Autonavigation bypassing throttle controls from joysticks
+    R2Sensors();                // Calculate Sensor readings from Ping Sensors Front left and right
+  }
+  else if (R2mode == Following)
+  {
+    autoNavigation = true;      // Engage Autonavigation bypassing throttle controls from joysticks
+  }
+  else if (R2mode == Searching)
+  {
+    autoNavigation = true;      // Engage Autonavigation bypassing throttle controls from joysticks
+  }
+
+// ============================== Dome Status ==============================================
+
+  if (R2domeStatus == Home)             // R2 Dome is in home position
+  {
+    
+  }
+  else if (R2domeStatus == Turn)     // R2 Dome is turning
+  {
+    
+  }
+  else if (R2domeStatus == Ready)       // R2 Dome is ready to turn
+  {
+    
+  }
+  else if (R2domeStatus == Error)       // R2 Dome doesnt match body direction
+  {
+    
+  }
+  return;
+}
+// =======================================================================================
+//           R2Sensor Calculate Turning from obstacles calcDesiredTurn()
+// =======================================================================================
+
+void calcDesiredTurn()    // calculate where we need to turn to head to destination
+{ 
+  headingError = targetHeading - bodynav;
+  if (headingError < -180)                        // adjust for compass wrap
+    headingError += 360;
+  if (headingError > 180)
+    headingError -= 360;
+  // calculate which way to turn to intercept the targetHeading
+  if (abs(headingError) <= HEADING_TOLERANCE)     // if within tolerance, don't turn
+    turnDirection = straight;
+  else if (headingError < 0)
+    turnDirection = left;
+  else if (headingError > 0)
+    turnDirection = right;
+  else
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.print("GPS TargetHeading: ");
+      Serial.println(targetHeading);
+      Serial.print("GPS HeadingError: ");
+      Serial.println(headingError);
+      Serial.print("GPS turnDirection: ");
+      Serial.println(turnDirection);
+    }
+  return;
 }
 #endif
 
@@ -646,75 +784,95 @@ void calcDesiredTurn(void)  {
 // 180.0 = South
 // 270 = West
 
+// =============================== BODY COMPASS ===============================================
+
 #ifdef COMPASS
-int readBodyCompass(void) {
-  sensors_event_t event;                                      // Get and assign the sensor to an event
+float readBodyCompass() 
+{
   tcaselect(1);
-  magbody.getEvent(&event);
+  magbody.getEvent(&magbody_event);
 
   // Calculate the angle of the vector y,x
   // float heading = (atan2(event.magnetic.y,event.magnetic.x) * 180) / Pi;
   // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
   // Find yours here: http://www.magnetic-declination.com/
   // Cedar Park, TX: Magnetic declination: 4Â° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
-  float heading = atan2(event.magnetic.y, event.magnetic.x);
-  //    #define DEC_ANGLE 0.069
-  //    heading += DEC_ANGLE;
-#define DEC_ANGLE 0.2094395102
-  heading -= DEC_ANGLE;
+  // #define DEC_ANGLE 0.069
+  // heading += DEC_ANGLE;
+  // int heading = atan2(event.magnetic.y, event.magnetic.x);
 
-  // Correct for when signs are reversed.
-  if (heading < 0)
+  float heading = atan2(magbody_event.magnetic.y, magbody_event.magnetic.x);
+  #define DEC_ANGLE 0.2094395102
+  heading -= DEC_ANGLE;
+  if (isDebug)
+  Serial.println("DEC_ANGLE");
+  
+  if (heading < 0)  // Correct for when signs are reversed.
     heading += 2 * PI;
 
-  // Check for wrap due to addition of declination.
-  if (heading > 2 * PI)
+  
+  if (heading > 2 * PI) // Check for wrap due to addition of declination.
     heading -= 2 * PI;
 
   // Convert radians to degrees for readability.
   float headingDegrees = heading * 180 / M_PI;
-  if (isDebug) {
+  if (isDebug) 
+  {
     Serial.print("Body Compass Heading...");
     Serial.println(headingDegrees);
   }
-  return ((int)headingDegrees);
+  return ((float)headingDegrees);
 }
 #endif
 
-#ifdef COMPASS
-int readDomeCompass(void) {
-  sensors_event_t event;    // Get and assign the sensor to an even
-  tcaselect(0);             // Connecting direct to the i2c channel instead of the multiplexer
-  magdome.getEvent(&event);
+// =============================== DOME COMPASS ===============================================
 
+#ifdef COMPASS
+float readDomeCompass() 
+{
+  #ifndef COMPASS_HMC5883L
+  tcaselect(0);             // Connecting direct to the i2c channel instead of the multiplexer
+  magdome.getEvent(&magdome_event);
+  #endif
+  #ifdef COMPASS_HMC5883L
+  compass.getEvent(&compass_event); 
+  #endif
+  
   // Calculate the angle of the vector y,x
   // float heading = (atan2(event.magnetic.y,event.magnetic.x) * 180) / Pi;
   // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
   // Find yours here: http://www.magnetic-declination.com/
   // Cedar Park, TX: Magnetic declination: 4Â° 11' EAST (POSITIVE);  1 degreee = 0.0174532925 radians
-
-  float heading = atan2(event.magnetic.y, event.magnetic.x);
   // #define DEC_ANGLE 0.069
-  //heading += DEC_ANGLE;
-#define DEC_ANGLE 0.2094395102
-  heading -= DEC_ANGLE;
+  // heading += DEC_ANGLE;
+  // int heading = atan2(event.magnetic.y, event.magnetic.x);
 
-  // Correct for when signs are reversed.
-  if (heading < 0)
+  #ifndef COMPASS_HMC5883L
+  float heading = atan2(magdome_event.magnetic.y, magdome_event.magnetic.x);
+  #endif
+  #ifdef COMPASS_HMC5883L
+  float heading = atan2(compass_event.magnetic.y, compass_event.magnetic.x);
+  #endif
+  #define DEC_ANGLE 0.2094395102
+  heading -= DEC_ANGLE;
+  if (isDebug)
+  Serial.println("DEC_ANGLE");
+  
+  if (heading < 0)  // Correct for when signs are reversed.
     heading += 2 * PI;
 
-  // Check for wrap due to addition of declination.
-  if (heading > 2 * PI)
+  
+  if (heading > 2 * PI) // Check for wrap due to addition of declination.
     heading -= 2 * PI;
 
   // Convert radians to degrees for readability.
   float headingDegrees = heading * 180 / M_PI;
-  if (isDebug)  {
-    Serial.print("Dome Compass Heading...");
+  if (isDebug) 
+  {
+    Serial.print("Body Compass Heading...");
     Serial.println(headingDegrees);
   }
-  return ((int)headingDegrees);
-
+  return ((float)headingDegrees);
 }
 #endif
 
@@ -737,9 +895,10 @@ void processGPS(void) {
   courseToWaypoint();
 }
 #endif
+
 // converts lat/long from Adafruit degree-minute format to decimal-degrees
 #ifdef USE_GPS
-double convertDegMinToDecDeg (float degMin)
+double convertDegMinToDecDeg (float degMin) 
 {
   double min = 0.0;
   double decDeg = 0.0;
@@ -750,10 +909,11 @@ double convertDegMinToDecDeg (float degMin)
   //rebuild coordinates in decimal degrees
   degMin = (int) ( degMin / 100 );
   decDeg = degMin + ( min / 60 );
-#ifdef SHADOW_VERBOSE
-  Serial.print("GPS: CompassDegress: ");
-  Serial.println(decDeg);
-#endif
+  if (isDebug)  
+    {
+    Serial.print("GPS: CompassDegress: ");
+    Serial.println(decDeg);
+    }
   return decDeg;
 }
 #endif
@@ -763,23 +923,25 @@ double convertDegMinToDecDeg (float degMin)
 // =======================================================================================
 
 #ifdef USE_GPS
-void nextWaypoint(void) {
+void nextWaypoint(void) 
+{
   waypointNumber++;
-  targetLat = waypointList[waypointNumber].getLat();
+  targetLat  = waypointList[waypointNumber].getLat();
   targetLong = waypointList[waypointNumber].getLong();
-
-  if ((targetLat == 0 && targetLong == 0) || waypointNumber >= NUMBER_WAYPOINTS)  { // last waypoint reached?
-    while (footDriveSpeed > 0) {                                                    // Bring R2 to Stop (ramping)
+  
+  if ((targetLat == 0 && targetLong == 0) || waypointNumber >= NUMBER_WAYPOINTS)    // last waypoint reached?
+  { 
+    while (footDriveSpeed > 0)                                                      // Bring R2 to Stop (ramping)
+    {                                                    
       footDriveSpeed = footDriveSpeed -= ramping;
       ST->turn(turnDirection * invertturnDirection);
       ST->drive(footDriveSpeed);
     }
-#ifdef USE_LCD
-    lcd.clear();
-    lcd.println(F("* LAST WAYPOINT *"));
-    WayPointDecision();
-#endif
-
+    #ifdef USE_LCD
+      lcd.clear();
+      lcd.println(F("* LAST WAYPOINT *"));
+      WayPointDecision();
+    #endif
   }
   processGPS();
   distanceToTarget = originalDistanceToTarget = distanceToWaypoint();
@@ -800,7 +962,8 @@ int courseToWaypoint()
   float a2 = sin(cLat) * cos(tLat) * cos(dlon);
   a2 = cos(cLat) * sin(tLat) - a2;
   a2 = atan2(a1, a2);
-  if (a2 < 0.0) {
+  if (a2 < 0.0) 
+  {
     a2 += TWO_PI;
   }
   targetHeading = degrees(a2);
@@ -813,7 +976,8 @@ int courseToWaypoint()
 // Because Earth is no exact sphere, rounding errors may be up to 0.5%.
 // copied from TinyGPS library
 
-int distanceToWaypoint() {
+int distanceToWaypoint() 
+{
   float delta = radians(currentLong - targetLong);
   float sdlong = sin(delta);
   float cdlong = cos(delta);
@@ -834,20 +998,17 @@ int distanceToWaypoint() {
   // check to see if we have reached the current waypoint
   if (distanceToTarget <= WAYPOINT_DIST_TOLERANCE)
     nextWaypoint();
-
   return distanceToTarget;
-}  // distanceToWaypoint()
+}
 #endif
 
 // =======================================================================================
 //           R2Sensor WayPointDecision
 // =======================================================================================
 
-// end of program routine, loops forever
-void WayPointDecision(void)
+void WayPointDecision(void)                           // end of program routine, loops forever
 {
-  // while (1)
-  ;
+  // while (1);
 }
 
 
@@ -855,38 +1016,46 @@ void WayPointDecision(void)
 //           R2Sensor i2c Recieve checkins
 // =======================================================================================
 // distance data from 2 feet and nav from dome
-// left = 1, right =2, center = 3, voice = 4 (Dome and Body Compass moved to i2c MultiPlexer)
+// left = 1, right =2, center = 3, voice = 4 
+// (Dome and Body Compass moved to i2c MultiPlexer)
 
-void receiveI2C(int howMany) {
-  if (Wire.available() > 0) {
+void receiveI2C(int howMany) 
+{
+  if (Wire.available() > 0) 
+  {
     partnum = Wire.read();
-    front =   Wire.read();
-    side =    Wire.read();
-    back =    Wire.read();
+    front   = Wire.read();
+    side    = Wire.read();
+    back    = Wire.read();
 
-    if (partnum == 1) {         // This is the left foot sensor checking in
-      leftfront = front;
-      leftside =  side;
-      leftback =  back;
+    if (partnum == 1) 
+    {         // This is the left foot sensor checking in
+      leftfront =  front;
+      leftside  =  side;
+      leftback  =  back;
     }
-    if (partnum == 2) {         // This is the right foot sensor checking in
+    if (partnum == 2) 
+    {         // This is the right foot sensor checking in
       rightfront = front;
-      rightside = side;
-      rightback = back;
+      rightside  = side;
+      rightback  = back;
     }
-    if (partnum == 3) {         // This is the center foot sensor checking in
+    if (partnum == 3) 
+    {         // This is the center foot sensor checking in
       centerfront = front;
-      centerleft = side;
+      centerleft  = side;
       centerright = back;
     }
-    if (partnum == 4) {         // This is the voice sensor using EasyVR checking in
-      voicecmd =  front;
+    if (partnum == 4) 
+    {         // This is the voice sensor using EasyVR checking in
+      voicecmd    = front;
     }
 
-
-    if (isDebug)  {
+    if (isDebug)  
+    {
       Serial.print (partnum);
-      if (partnum == 1 || partnum == 2) {     // If partnum reported 1 or 2 then its the outer feet checking in
+      if (partnum == 1 || partnum == 2) 
+      {     // If partnum reported 1 or 2 then its the outer feet checking in
         Serial.print (" front ");
         Serial.print (front);
         Serial.print (" side ");
@@ -894,7 +1063,8 @@ void receiveI2C(int howMany) {
         Serial.print (" back ");
         Serial.print(back);
       }
-      if (partnum == 3)  {                   // if the partnum reported 3 then its the front center foot
+      else if (partnum == 3)  
+      {     // if the partnum reported 3 then its the front center foot
         Serial.print (" front ");
         Serial.print (front);
         Serial.print (" left ");
@@ -902,14 +1072,14 @@ void receiveI2C(int howMany) {
         Serial.print (" right ");
         Serial.print(back);
       }
-      if (partnum == 4)  {                   // if the partnum is 4 then its the voice module on a arduino UNO/Duomilanove
+      else if (partnum == 4)  
+      {     // if the partnum is 4 then its the voice module on a arduino UNO/Duomilanove
         Serial.print (" VoiceCommand: ");
         Serial.print (voicecmd);
       }
       Serial.println ("");
     }
   }
-  //  }
 }
 
 // =======================================================================================
@@ -936,31 +1106,47 @@ void SendSensorStatus() {
 //           R2Sensor Decision(s) |  Randomization
 // =======================================================================================
 
-void R2Decision() {
-#ifdef SHADOW_VERBOSE
-  Serial.print("Current time: ");
-  Serial.println(currentTime);
-  Serial.print("Last Decision time: ");
-  Serial.println(lastDecisionTime);
-#endif
-  if ((currentTime - lastDecisionTime) >= automationInterval) {
+void R2Decision() 
+{
+  if (isDebug)
+  {
+    Serial.print("Current time: ");
+    Serial.print(currentTime);
+    Serial.print(" || Last Decision time: ");
+    Serial.println(lastDecisionTime);
+  }
+  #ifndef PATROL_DEBUG
+  if ((currentTime - lastDecisionTime) >= automationInterval) 
+  {
     lastDecisionTime = millis();
     choice = random(1);
-    if (choice == 0) {
-      state = stateMovingFwd;
+    if (choice == 0)
+    {
+      R2state = MovingFwd;
+      R2mode = Patroling;
     }
-    if (choice == 1) {
-      state = stateStopped;
+    else if (choice == 1)
+    {
+      R2state = Stopped;
+      R2mode = Aware;
     }
-    // else if (choice == 2) {
-    //  state = statePlayfull;
-    // }
-#ifdef SHADOW_VERBOSE
-    Serial.print("MadeDecision: ");
-    Serial.println(choice);
-#endif
+    else if (choice == 2)
+    {
+      R2state = Stopped;
+      R2mode = Sleep;
+    }
+    if (isDebug)
+    {
+      Serial.print("MadeDecision: ");
+      Serial.println(choice);
+    }
     return;
-  }
+  } else
+  #endif
+  #ifdef PATROL_DEBUG
+      R2state = MovingFwd;
+      R2mode = Patroling;
+  #endif
   return;
 }
 
@@ -968,70 +1154,159 @@ void R2Decision() {
 //           R2Sensor Decision(s) |  TurnChoice
 // =======================================================================================
 
-void R2TurnChoice ()  {
+void R2TurnChoice ()  
+{
   int turnchoice = random(2);
   if (turnchoice == 0) {
     turnDirection = right;
     ST->turn(turnDirection * invertturnDirection);      // Turn R2 Right Full
-    // speed = 0;
   } else if (turnchoice == 1)  {
     turnDirection = left;
     ST->turn(turnDirection * invertturnDirection);      // Turn R2 Left Full
-    // speed = 0;
   } else
     turnDirection = straight;
   ST->turn(turnDirection * invertturnDirection);      // Turn R2 Left Full
-  // speed = 0;
 }
 
 // =======================================================================================
 //           R2Sensor Decision(s) |  Recenter the Dome
 // =======================================================================================
 
-void recenterDomeOnly(void)  {
-  int domeSpeed;
-  if ((currentTime - DomelastDecisionTime) >= automationInterval  && (domenav != bodynav)) {
+void recenterDome()  
+{
+#ifdef COMPASS
+  int domeSpeed,viewError;
+  currentTime = millis();
+  if (isDebug)  
+  {
+    Serial.print("Current Time:");
+    Serial.println(currentTime);
+    Serial.print("DomelastDecisionTime:");
+    Serial.println(DomelastDecisionTime);
+  }
+  if ((currentTime - DomelastDecisionTime) >= automationInterval)
+  {
     DomelastDecisionTime = millis();
-    error = domenav - bodynav;                          // calculate which way to turn the dome to intercept the targetHeading
-    if (abs(error) <= HEADING_TOLERANCE)                // if within tolerance, don't turn
-      dometurnDirection = 0;
-    else if (error < 0)                                 // if error is a negative number, then we assume Dome is less than body number.
-      if (abs(error) > 180)                             // if error is more than 180 degrees turn left
-        dometurnDirection = -1;
-      else
-        dometurnDirection = 1;
-    else if (error > 0)                                 // if error is a positive number, then we assume Dome is more than body number.
-      if (abs(error) < 180)                             // if error is less than 180 degrees turn left
-        dometurnDirection = -1;
-      else
-        dometurnDirection = 1;
+    R2domeStatus == Turn;
+  }
+  if (R2domeStatus != Error && R2domeStatus == Turn && viewError > HEADING_TOLERANCE) 
+  {
+    // If dome status is not in error and is turning while the degrees do not match between dome and body above tolerance levels.
+    R2domeStatus = Turn;
+    
+    tcaselect(1);
+    if (magbody.begin())  
+    {
+      bodynav = readBodyCompass();                // Get our current heading from Body COMPASS portion of the code
+      if (isDebug)  
+      {
+        Serial.print("Bodynav: ");
+        Serial.println(bodynav);
+      }
+    }
     else
+    {
+      if (isDebug)  
+      {
+        Serial.println("Body Compass not found ");
+      }
+      R2domeStatus = Error;
+    }
+    
+    tcaselect(0);
+    if (magdome.begin())  
+    {
+      domenav = readDomeCompass();                // Get our current heading from Dome COMPASS portion of the code
+      if (isDebug)  
+      {
+        Serial.print("Domenav: ");
+        Serial.println(domenav);
+      }
+    } 
+    else
+    {
+    if (isDebug)  
+      {
+        Serial.println("Dome Compass not found ");
+      }
+      R2domeStatus = Error;
+    }
+    
+    viewError = domenav - bodynav;                          // calculate which way to turn the dome to intercept the targetHeading
+    if (abs(viewError) <= HEADING_TOLERANCE)                // if within tolerance, don't turn
+    {
       dometurnDirection = 0;
+      R2domeStatus = Home;
+    }
+    else if (viewError < 0)                                 // if error is a negative number, then we assume Dome is less than body number.
+    {
+      if (abs(viewError) > 180)                             // if error is more than 180 degrees turn left
+      {
+        dometurnDirection = -1;
+        R2domeStatus = Turn;
+      }
+
+      else
+      {
+        dometurnDirection = 1;
+        R2domeStatus = Turn;
+      }
+    }
+    else if (viewError > 0)                                 // if error is a positive number, then we assume Dome is more than body number.
+    {
+      if (abs(viewError) < 180)                             // if error is less than 180 degrees turn left
+      {
+        dometurnDirection = -1;
+        R2domeStatus = Turn;
+      }
+      else
+      {
+        dometurnDirection = 1;
+        R2domeStatus = Turn;
+      }
+    }
+    else
+    {
+      dometurnDirection = -1;
+      R2domeStatus = Turn;
+    }
     domeSpeed = domeAutoSpeed * dometurnDirection;
-    if ((error = error * -1) <= HEADING_TOLERANCE) {
+    if (abs(viewError) <= HEADING_TOLERANCE)
+    {
+      R2domeStatus = Home;
       domeStatus = 0;
       SyR->stop();
-#ifdef SHADOW_DEBUG
-      Serial.print  ("Error: ");
-      Serial.print  (error);
-      Serial.println("...Stopping Dome\r\n");
-#endif
-    } else {
+      if (isDebug)
+        {
+          Serial.print  ("viewError: ");
+          Serial.print  (viewError);
+          Serial.println("...Stopping Dome\r\n");
+        }
+    } 
+    else 
+    {
+      R2domeStatus = Turn;
       SyR->motor(domeSpeed);
-#ifdef SHADOW_DEBUG
-      Serial.print ("...Auto Return Dome\r\n");
-      Serial.print  ("Error: ");
-      Serial.print  (error);
-      Serial.print ("Dome Turning Direction:");
-      Serial.println (dometurnDirection);
-      Serial.print  ("Turning Dome ");
-      Serial.println((domespeed));
-#endif
+      if (isDebug)
+        {
+          Serial.print ("...Auto Return Dome\r\n");
+          Serial.print  ("viewError: ");
+          Serial.print  (viewError);
+          Serial.print ("Dome Status:");
+          Serial.println (R2domeStatus);
+          Serial.print ("Dome Turning Direction:");
+          Serial.println (dometurnDirection);
+          Serial.print  ("Turning Dome ");
+          Serial.println((domespeed));
+        }
     }
   }
-
-
+  else
+    R2domeStatus = Home;
+#endif
 }
+
+
 void cautiousR2(void)  {
   int domeSpeed, ObjectIsClose = 65;
   speed = 50;
@@ -1078,352 +1353,168 @@ void cautiousR2(void)  {
 
 
 // =======================================================================================
-//           R2Sensor Go on Patrol
+//           R2Sensor: Patrol
 // =======================================================================================
 
 #ifdef COLLISION
-void R2move() {
-  if (state == stateMovingFwd)
+void R2Patrol() 
+{
+  if (distance >= SAFE_DISTANCE)
   {
-    if (distance >= SAFE_DISTANCE)
-    {
-      if (turnDirection == straight)
-      {
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Straight: FAST");
-#endif
-        speed = FAST_SPEED;
-      } else
-      {
-        turnDirection = straight;
-        speed = NORMAL_SPEED;
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE > Normal and set back to Straight");
-#endif
-      }
-      return;
-    }
-
-    if (distance > TURN_DISTANCE && distance < SAFE_DISTANCE)
-    {
-      if (turnDirection == straight)
-        speed = NORMAL_SPEED;                                       // not yet time to turn, but slow down
-      else
-      {
-        speed = TURN_SPEED;                                         // we are already turning set to turn speed
-      }
-      return;
-    }
-    if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)      // getting close, time to turn to avoid object
-    {
-      speed = TURN_SPEED;
-#ifndef USE_GPS
-      switch (turnDirection)  {
-        case straight:  {                                           // Straight currently, so start new turn
-            if (distancerightfront <= TURN_DISTANCE)                // Right Check against Safe Distance Variable (130cm)
-              turnDirection = left;
-            else
-              turnDirection = right;
-            break;
-          }
-        case left:  {                                               // if already turning left, try right
-            if (distanceleftfront <= TURN_DISTANCE)                 // Right Check against Safe Distance Variable (130cm)
-              turnDirection = right;
-            else
-              turnDirection = left;
-            break;
-          }
-        case right: {                                               // if already turning right, try left
-            if (distancerightfront <= TURN_DISTANCE)                // Right Check against Safe Distance Variable (130cm)
-              turnDirection = left;
-            else
-              turnDirection = right;
-            break;
-          }
-      }                                                             // end SWITCH
-#endif
-
-#ifdef USE_GPS
-      if (Waypointenabled == true)  {
-        switch (turnDirection)  {
-          case straight:  {                                     // going straight currently, so start new turn
-              if (headingError <= 0)
-                turnDirection = left;
-              else
-                turnDirection = right;
-              ST->turn(turnDirection * invertturnDirection);      // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(turnDirection);
-#endif
-              break;
-            }
-          case left:                                            // if already turning left, try right
-            {
-              ST->turn(R2MOVE_RIGHT * invertturnDirection);     // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(R2MOVE_RIGHT);
-#endif
-              break;
-            }
-          case right:                                           // if already turning right, try left
-            {
-              ST->turn(R2MOVE_LEFT * invertturnDirection);      // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(R2MOVE_LEFT);
-#endif
-              break;
-            }
-        } // end SWITCH
-      }
-#endif
-      return;
-    }
-    if (distance <  STOP_DISTANCE)                              // too close, stop and back up
-    {
-      turnDirection = straight;
-      speed = 0;
-      if (footDriveSpeed == 0)
-        state = stateStopped;
-      return;
-    }
-  }
-  else if (state == stateTurning)  {
-    if (distance >= SAFE_DISTANCE)  {
-      if (turnDirection == straight) {
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Straight: FAST");
-#endif
-        speed = FAST_SPEED;
-      } else  {
-        turnDirection = straight;
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Turning: speed to Normal and set back to Straight");
-#endif
-        turnDirection = straight;
-        speed = NORMAL_SPEED;
-      }
-      return;
-    }
-    if (distance > TURN_DISTANCE && distance < SAFE_DISTANCE) {
-      turnDirection = straight;
-      speed = NORMAL_SPEED;                                       // not yet time to turn, but slow down
-      return;
-    }
-    if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)  { // getting close, time to turn to avoid object
-      speed = TURN_SPEED;
-#ifndef USE_GPS
-      switch (turnDirection)  {
-        case straight:  {                                           // Straight currently, so start new turn
-            if (distancerightfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = left;
-            else
-              turnDirection = right;
-            break;
-          }
-        case left:  {                                               // if already turning left, try right
-            if (distanceleftfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = right;
-            else
-              turnDirection = left;
-            break;
-          }
-        case right: {                                               // if already turning right, try left
-            if (distancerightfront <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = left;
-            else
-              turnDirection = right;
-            break;
-          }
-      }                                                         // end SWITCH
-#endif
-
-#ifdef USE_GPS
-      if (Waypointenabled == true) {
-        switch (turnDirection)  {
-          case straight:  {                                     // going straight currently, so start new turn
-              if (headingError <= 0)
-                turnDirection = left;
-              else
-                turnDirection = right;
-              ST->turn(turnDirection * invertturnDirection);      // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(turnDirection);
-#endif
-              break;
-            }
-          case left:                                            // if already turning left, try right
-            {
-              ST->turn(R2MOVE_RIGHT * invertturnDirection);     // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(R2MOVE_RIGHT);
-#endif
-              break;
-            }
-          case right:                                           // if already turning right, try left
-            {
-              ST->turn(R2MOVE_LEFT * invertturnDirection);      // alraedy turning to navigate
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(R2MOVE_LEFT);
-#endif
-              break;
-            }
-        } // end SWITCH
-      }
-#endif
-      return;
-    }
-    if (distance <  STOP_DISTANCE) {                            // too close, stop and back up
-      turnDirection = straight;
-      speed = 0;
-      if (footDriveSpeed == 0)
-        state = stateStopped;
-      return;
-    }
-  }
-  else if (state == stateMovingBck)  {
-    if (distance >= SAFE_DISTANCE)  {
-      if (turnDirection == straight) {
-        turnDirection = straight;
-        speed = -FAST_SPEED;
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Straight: FAST");
-#endif
-      } else  {
-        turnDirection = straight;
-        speed = -NORMAL_SPEED;
-#ifdef SHADOW_DEBUG
-        Serial.println("Distance > SAFE Turning: speed to Normal and set back to Straight");
-#endif
-      }
-      return;
-    }
-    if (distance > TURN_DISTANCE && distance < SAFE_DISTANCE) {
-      if (turnDirection == straight)
-        speed = -NORMAL_SPEED;                                     // not yet time to turn, but slow down
-      else
-        speed = -TURN_SPEED;                                       // we are already turning set to turn speed
-      return;
-    }
-    if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)  { // getting close, time to turn to avoid object
-      speed = -TURN_SPEED;
-#ifndef USE_GPS
-      switch (turnDirection)  {
-        case straight:  {                                           // Straight currently, so start new turn
-            if (distancerightback <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = right;
-            else
-              turnDirection = left;
-            break;
-          }
-        case left:  {                                             // if already turning left, try right
-            if (distanceleftback <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = left;
-            else
-              turnDirection = right;
-            break;
-          }
-        case right: {                                             // if already turning right, try left
-            if (distancerightback <= TURN_DISTANCE)                  // Right Check against Safe Distance Variable (130cm)
-              turnDirection = right;
-            else
-              turnDirection = left;
-            break;
-          }
-      }                                                         // end SWITCH
-#endif
-
-#ifdef USE_GPS
-      if (Waypointenabled == true) {
-        switch (turnDirection)  {
-          case straight:
-            { // going straight currently, so start new turn
-              if (headingError <= 0)
-                turnDirection = right;
-              else
-                turnDirection = left;
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(turnDirection);
-#endif
-              break;
-            }
-          case left:                                            // if already turning left, try right
-            {
-              turnDirection = left;
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(turnDirection);
-#endif
-              break;
-            }
-          case right:                                           // if already turning right, try left
-            {
-              turnDirection = right;
-#ifdef SHADOW_DEBUG
-              Serial.print("GPS turnDirection: ");
-              Serial.println(turnDirection);
-#endif
-              break;
-            }
-        } // end SWITCH
-      }
-#endif
-
-      return;
-    }
-    if (distance <  STOP_DISTANCE) {                            // too close, stop and back up
-      turnDirection = straight;
-      speed = 0;
-      if (footDriveSpeed == 0)
-        state = stateStopped;
-      return;
-    }
-
-  }
-  else if (state == stateStopped) {
-#ifdef SHADOW_DEBUG
-    Serial.print("Stopped ");
-#endif
+    speed = FAST_SPEED;
     turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("SAFE SPEED:FAST");
+    }
+    return;
+  }
+  else if (distance < SAFE_DISTANCE && distance > TURN_DISTANCE)
+  {
+    speed = NORMAL_SPEED;
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("SPEED:NORMAL");
+    }
+  }
+  else if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)
+  {
+    speed = TURN_SPEED; // slow down to turn, prepare for turn check sensors
+    if (distancerightfront > distanceleftfront)
+    {
+      turnDirection = right;  // turn right because it has more room
+      if (isDebug)
+      {
+        Serial.println("TURN: right");
+      }
+    }
+    else
+    {
+      turnDirection = left;  // turn left because it has more room
+      if (isDebug)
+      {
+        Serial.println("TURN: left");
+      }
+    }
+  }
+  else if (distance <= STOP_DISTANCE)
+  {
     speed = 0;
-    return;
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("STOP: 0");
+    }
   }
-  else if (state == statePlayfull) {
-#ifdef SHADOW_DEBUG
-    Serial.print("Being Playful ");
-#endif
-    return;
-  }
-  return;
 }
 #endif
 
+// =======================================================================================
+//           R2Sensor: Waypoint navigation using GPS
+// =======================================================================================
+
+#ifdef COLLISION
+void R2Waypointnav() 
+{
+  if (isDebug)
+  {
+    Serial.print("State: ");
+    Serial.print(R2state); 
+    Serial.print(" LeftFront: ");
+    Serial.print(leftfront); 
+    Serial.print(" RightFront: ");
+    Serial.print(rightfront); 
+    Serial.print(" distance: ");
+    Serial.println(distance); 
+  }  
+  if (distance >= SAFE_DISTANCE)
+  {
+    speed = FAST_SPEED;
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("SAFE SPEED:FAST");
+    }
+    return;
+  }
+  else if (distance < SAFE_DISTANCE && distance > TURN_DISTANCE)
+  {
+    speed = NORMAL_SPEED;
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("SPEED:NORMAL");
+    }
+    #ifdef GPS_ENABLE
+    if (R2mode == Waypoint)
+    {
+      if (headingError < 0)
+        turnDirection = left;
+      else
+        turnDirection = right;
+      if (isDebug)
+      {
+        Serial.print("GPS turnDirection: ");
+        Serial.println(turnDirection);
+      }
+    }
+    #endif
+  }
+  else if (distance <= TURN_DISTANCE && distance > STOP_DISTANCE)
+  {
+    speed = TURN_SPEED; // slow down to turn, prepare for turn check sensors
+    if (distancerightfront > distanceleftfront)
+    {
+      turnDirection = right;  // turn right because it has more room
+      if (isDebug)
+      {
+        Serial.println("TURN: right");
+      }
+    }
+    else
+    {
+      turnDirection = left;  // turn left because it has more room
+      if (isDebug)
+      {
+        Serial.println("TURN: left");
+      }
+    }
+  }
+  else if (distance <= STOP_DISTANCE)
+  {
+    speed = 0;
+    turnDirection = straight;
+    if (isDebug)
+    {
+      Serial.println("STOP: 0");
+    }
+  }
+}
+#endif
 
 // =======================================================================================
 //           R2Sensor math or work against the findings during scanning
 // =======================================================================================
 
 #ifdef COLLISION
-void R2Sensors() {
+void R2Sensors() 
+{
   distanceleftfront = sonarLeftFrontAverage.add(leftfront);             // add the new value into moving average, use resulting average
   distancerightfront = sonarRightFrontAverage.add(rightfront);          // add the new value into moving average, use resulting average
   distanceleftside = sonarLeftSideAverage.add(leftside);                // add the new value into moving average, use resulting average
   distancerightside = sonarRightSideAverage.add(rightside);             // add the new value into moving average, use resulting average
   distanceleftback = sonarLeftBackAverage.add(leftback);                // add the new value into moving average, use resulting average
   distancerightback = sonarRightBackAverage.add(rightback);             // add the new value into moving average, use resulting average
-  if (movingfwd())  {
+  if (R2state == MovingFwd)  
+  {
     if (distanceleftfront < TURN_DISTANCE) {
       if (distanceleftfront <= 0)
         distanceleftfront = 255;                                          // If the sensor returns 0 (clear) then set it as 255
       else
         distance = distanceleftfront;
-    } else if (distancerightfront < TURN_DISTANCE) {
+    } else if (distancerightfront < TURN_DISTANCE) 
+    {
       if (distancerightfront <= 0)
         distancerightfront = 255;                                         // If the sensor returns 0 (clear) then set it as 255
       else
@@ -1431,7 +1522,9 @@ void R2Sensors() {
     }
     else
       distance = (distanceleftfront + distancerightfront) / 2;          // Average the returned distance of combined left and right
-  } else if (movingbck()) {
+  } 
+  else if (R2state == MovingBck) 
+  {
     if (distanceleftback < TURN_DISTANCE) {
       if (distanceleftback <= 0)
         distanceleftback = 255;                                           // If the sensor returns 0 (clear) then set it as 255
@@ -1445,18 +1538,10 @@ void R2Sensors() {
     }
     else
       distance = (distanceleftback + distancerightback) / 2;            //Average the returned distance of combined left and right
-  } else if (turning()) {
-    if (distanceleftside < TURN_DISTANCE) {
-      if (distanceleftside <= 0)
-        distanceleftside = 255;                                           // If the sensor returns 0 (clear) then set it as 255
-      else
-        distance = distanceleftside;
-    } else if (distancerightside < TURN_DISTANCE) {
-      if (distancerightside <= 0)
-        distancerightside = 255;                                          // If the sensor returns 0 (clear) then set it as 255
-      else
-        distance = distancerightside;
-    } else if (distanceleftfront < TURN_DISTANCE) {
+  } 
+  else if (R2state == Turning) 
+  {
+    if (distanceleftfront < TURN_DISTANCE) {
       if (distanceleftfront <= 0)
         distanceleftfront = 255;                                          // If the sensor returns 0 (clear) then set it as 255
       else
@@ -1470,6 +1555,26 @@ void R2Sensors() {
     else
       distance = (distanceleftfront + distancerightfront) / 2;          //Average the returned distance of combined left and right
   }
+  else if (R2state == Stopped) 
+  {
+    if (distanceleftfront < TURN_DISTANCE) 
+    {
+      if (distanceleftfront <= 0)
+        distanceleftfront = 255;                                          // If the sensor returns 0 (clear) then set it as 255
+      else
+        distance = distanceleftfront;
+    } 
+    else if (distancerightfront < TURN_DISTANCE) 
+    {
+      if (distancerightfront <= 0)
+        distancerightfront = 255;                                         // If the sensor returns 0 (clear) then set it as 255
+      else
+        distance = distancerightfront;
+    }
+    else
+      distance = (distanceleftfront + distancerightfront) / 2;          //Average the returned distance of combined left and right
+  }
+  return;
 }
 #endif
 
@@ -1477,8 +1582,9 @@ void R2Sensors() {
 //           R2Sensor obstacle decision making state
 // =======================================================================================
 #ifdef COLLISION
-bool obstacleAhead(unsigned int distance) {
-  return (distance <= TURN_DISTANCE);
+bool personAhead(unsigned int distance) 
+{
+  return (distance <= FOLLOW_DISTANCE);
 }
 #endif
 
@@ -1539,120 +1645,63 @@ bool obstacleAhead(unsigned int distance) {
 //  }
 
 // =======================================================================================
-//           R2Sensor safedistance subroutine
-// =======================================================================================
-#ifdef COLLISION
-void R2safedistance() {
-  if (movingfwd()) {
-    if (distanceleftfront <= TURN_DISTANCE || distancerightfront <= TURN_DISTANCE) {
-      makedecision = true;
-#ifdef SHADOW_VERBOSE
-      Serial.println("makedecision is true ");
-      Serial.print(distanceleftfront);
-      Serial.println(distancerightfront);
-#endif
-      return;
-    } else
-      makedecision = false;
-#ifdef SHADOW_VERBOSE
-    Serial.println("makedecision is false ");
-    Serial.print(distanceleftfront);
-    Serial.println(distancerightfront);
-#endif
-    return;
-  }
-  if (movingbck()) {
-    if (distanceleftback <= TURN_DISTANCE || distancerightback <= TURN_DISTANCE) {
-      makedecision = true;
-#ifdef SHADOW_VERBOSE
-      Serial.println("makedecision is true ");
-      Serial.print(distanceleftback);
-      Serial.println(distancerightback);
-#endif
-      return;
-    } else
-      makedecision = false;
-#ifdef SHADOW_VERBOSE
-    Serial.println("makedecision is false ");
-    Serial.print(distanceleftback);
-    Serial.println(distancerightback);
-#endif
-    return;
-  }
-  if (turning()) {
-    if (distanceleftside > TURN_DISTANCE && distancerightside > TURN_DISTANCE) {
-      makedecision = true;
-#ifdef SHADOW_VERBOSE
-      Serial.println("makedecision is true ");
-      Serial.print(distanceleftside);
-      Serial.println(distancerightside);
-#endif
-      return;
-    } else
-      makedecision = false;
-#ifdef SHADOW_VERBOSE
-    Serial.println("makedecision is false ");
-    Serial.print(distanceleftside);
-    Serial.println(distancerightside);
-#endif
-    return;
-  }
-  makedecision = false;
-#ifdef SHADOW_VERBOSE
-  Serial.println("makedecision is false ");
-#endif
-}
-#endif
-
-// =======================================================================================
 //           footDrive Motor Control Section
 // =======================================================================================
 
-boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3NavFoot)  {
-  //int stickSpeed = 0;  // Moved to global definitions to be used on R2Sensor controls
-  //int turnnum = 0;
+boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3NavFoot)  
+{
+  int stickSpeed = 0;
+  // int turnnum = 0;
 
   if (isPS3NavigatonInitialized)
   {
-    // Additional fault control.  Do NOT send additional commands to Sabertooth if no controllers have initialized.
-    if (!isStickEnabled)  {
-      if (!isFootMotorStopped)  {
-        ST->stop();
-        isFootMotorStopped = true;
-        footDriveSpeed = 0;
-      }
-      return false;
-
-    } else if (!myPS3->PS3NavigationConnected)  {
-      if (!isFootMotorStopped)  {
-        ST->stop();
-        isFootMotorStopped = true;
-        footDriveSpeed = 0;
-      }
-      return false;
-    } else if (myPS3->getButtonPress(L2) || myPS3->getButtonPress(L1))  {
-      if (!isFootMotorStopped)  {
-        ST->stop();
-        isFootMotorStopped = true;
-        footDriveSpeed = 0;
-      }
-      return false;
-    } else
+    // Additional fault control.  
+    // Do NOT send additional commands to Sabertooth if no controllers have initialized.
+    if (!isStickEnabled)  
     {
+      if (!isFootMotorStopped)  
+      {
+        ST->stop();
+        isFootMotorStopped = true;
+        footDriveSpeed = 0;
+      }
+      return false;
 
-      // =======================================================================================
-      //           R2Sensor Automation Bypass for joystick commands
-      //            Check to verify if automation is not enabled...
-      // =======================================================================================
-
-      if (!autoNavigation)  {
+    } 
+    else if (!myPS3->PS3NavigationConnected)  
+    {
+      if (!isFootMotorStopped)  
+      {
+        ST->stop();
+        isFootMotorStopped = true;
+        footDriveSpeed = 0;
+      }
+      return false;
+    } 
+    else if (myPS3->getButtonPress(L2) || myPS3->getButtonPress(L1))  
+    {
+      if (!isFootMotorStopped)  
+      {
+        ST->stop();
+        isFootMotorStopped = true;
+        footDriveSpeed = 0;
+      }
+      return false;
+    } 
+    else
+    {
+        speed = 0;
         int joystickPosition = myPS3->getAnalogHat(LeftHatY);
-        if (overSpeedSelected)  {                                                   //Over throttle is selected
+        if (overSpeedSelected)  //Over throttle is selected
+        {                                                   
           stickSpeed = (map(joystickPosition, 0, 255, -drivespeed2, drivespeed2));
-        } else {
+        } 
+        else 
+        {
           stickSpeed = (map(joystickPosition, 0, 255, -drivespeed1, drivespeed1));
         }
-        if ( abs(joystickPosition - 128) < joystickFootDeadZoneRange) {             // This is RAMP DOWN code when stick is now at ZERO but prior FootSpeed > 20
+        if ( abs(joystickPosition - 128) < joystickFootDeadZoneRange) // This is RAMP DOWN code when stick is now at ZERO but prior FootSpeed > 20
+        {             
           if (abs(footDriveSpeed) > 50) {
             if (footDriveSpeed > 0) {
               footDriveSpeed -= 3;
@@ -1660,13 +1709,13 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3NavFoot)  {
             {
               footDriveSpeed += 3;
             }
-#ifdef SHADOW_VERBOSE
-            Serial.print("ZERO FAST RAMP: footSpeed: ");
-            Serial.print(footDriveSpeed);
-            Serial.print("\nStick Speed: ");
-            Serial.print(stickSpeed);
-            Serial.println("");
-#endif
+            #ifdef SHADOW_VERBOSE
+              Serial.print("ZERO FAST RAMP: footSpeed: ");
+              Serial.print(footDriveSpeed);
+              Serial.print("\nStick Speed: ");
+              Serial.print(stickSpeed);
+              Serial.println("");
+            #endif
 
           } else if (abs(footDriveSpeed) > 20)
           {
@@ -1678,64 +1727,65 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3NavFoot)  {
               footDriveSpeed += 2;
             }
 
-#ifdef SHADOW_VERBOSE
-            Serial.print("ZERO MID RAMP: footSpeed: ");
-            Serial.print(footDriveSpeed);
-            Serial.print("\nStick Speed: ");
-            Serial.print(stickSpeed);
-            Serial.println("");
-#endif
+            #ifdef SHADOW_VERBOSE
+              Serial.print("ZERO MID RAMP: footSpeed: ");
+              Serial.print(footDriveSpeed);
+              Serial.print("\nStick Speed: ");
+              Serial.print(stickSpeed);
+              Serial.println("");
+            #endif
 
-          } else
+          } 
+          else
           {
             footDriveSpeed = 0;
           }
 
-        } else
+        } 
+        else
         {
-
           isFootMotorStopped = false;
-
           if (footDriveSpeed < stickSpeed)
           {
 
-            if ((stickSpeed - footDriveSpeed) > (ramping + 1))
+            if ((stickSpeed - footDriveSpeed) > (ramping + 1) || (speed - footDriveSpeed) > (ramping + 1))
             {
               footDriveSpeed += ramping;
-
-#ifdef SHADOW_VERBOSE
-              Serial.print("RAMPING UP: footSpeed: ");
-              Serial.print(footDriveSpeed);
-              Serial.print("\nStick Speed: ");
-              Serial.print(stickSpeed);
-              Serial.println("");
-#endif
-
-            } else
+              #ifdef SHADOW_VERBOSE
+                Serial.print("RAMPING DOWN: footSpeed: ");
+                Serial.print(footDriveSpeed);
+                Serial.print("\nStick Speed: ");
+                Serial.print(stickSpeed);
+                Serial.print("\ramping: ");
+                Serial.print(ramping);
+                Serial.println("");
+              #endif
+            } 
+            else
               footDriveSpeed = stickSpeed;
 
-          } else if (footDriveSpeed > stickSpeed)
+          } 
+          else if (footDriveSpeed > stickSpeed)
           {
-
-            if ((footDriveSpeed - stickSpeed) > (ramping + 1))
+            if ((footDriveSpeed - stickSpeed) > (ramping + 1) || (footDriveSpeed - speed) > (ramping + 1))
             {
-
               footDriveSpeed -= ramping;
+                #ifdef SHADOW_VERBOSE
+                Serial.print("RAMPING UP: footSpeed: ");
+                Serial.print(footDriveSpeed);
+                Serial.print("\nStick Speed: ");
+                Serial.print(stickSpeed);
+                Serial.print("\ramping: ");
+                Serial.print(ramping);
+                Serial.println("");
+              #endif
 
-#ifdef SHADOW_VERBOSE
-              Serial.print("RAMPING DOWN: footSpeed: ");
-              Serial.print(footDriveSpeed);
-              Serial.print("\nStick Speed: ");
-              Serial.print(stickSpeed);
-              Serial.println("");
-#endif
-
-            } else
+            } 
+            else
               footDriveSpeed = stickSpeed;
-          } else
-          {
+          } 
+          else
             footDriveSpeed = stickSpeed;
-          }
         }
 
         turnnum = (myPS3->getAnalogHat(LeftHatX));
@@ -1795,14 +1845,19 @@ boolean ps3FootMotorDrive(PS3BT* myPS3 = PS3NavFoot)  {
           previousFootMillis = currentMillis;
           return true; //we sent a foot command
         }
-      }  // end of automation check processing
     }  // end of joystick processing
   }
   return false;
 }
 
-void footMotorDrive() {
-  if (!autoNavigation)  {
+// =======================================================================================
+//           FootMotorDrive Subroutine
+// =======================================================================================
+
+void footMotorDrive() 
+{
+  if (!autoNavigation)  
+  {
     //Flood control prevention
     if ((millis() - previousFootMillis) < serialLatency) return;
     if (PS3NavFoot->PS3NavigationConnected) ps3FootMotorDrive(PS3NavFoot);
@@ -1811,102 +1866,119 @@ void footMotorDrive() {
     autoFootMotorDrive();
 }
 
-//void footMotorDrive()
-//{
-//
-//  //Flood control prevention
-//  if ((millis() - previousFootMillis) < serialLatency) return;
-//
-//  if (PS3NavFoot->PS3NavigationConnected) ps3FootMotorDrive(PS3NavFoot);
-//
-//}
-
 // =======================================================================================
 //           R2Sensor Automation footMotorDrive
 // =======================================================================================
-
-void autoFootMotorDrive() {
-  if (autoNavigation)  {
-    if (abs(footDriveSpeed) != 0)
+// Set the turnnum to the current direction indicated in Patrol and other commands
+// Read in the footdrivespeed which is set from SPEED
+void autoFootMotorDrive() 
+{
+  turnnum = turnDirection;  
+  if (footDriveSpeed < speed)
+  {
+    if ((speed - footDriveSpeed) > (ramping + 1) )
     {
-      isFootMotorStopped = false;
-      if ((footDriveSpeed) < speed)
+      footDriveSpeed += ramping;
+      if (isDebug)
       {
-        if ((speed - footDriveSpeed) > (ramping + 1))
-        {
-          footDriveSpeed += ramping;
-#ifdef SHADOW_DEBUG
-          Serial.print("RAMPING UP > footSpeed: ");
-          Serial.println(footDriveSpeed);
-          Serial.print("Speed: ");
-          Serial.println(speed);
-#endif
-
-        }
-        else
-          footDriveSpeed = speed;
-      }
-      else if (footDriveSpeed > speed)
-      {
-        if ((footDriveSpeed - speed) > (ramping + 1))
-        {
-          footDriveSpeed -= ramping;
-#ifdef SHADOW_DEBUG
-          Serial.print("RAMPING DOWN > footSpeed: ");
-          Serial.println(footDriveSpeed);
-          Serial.print("Speed: ");
-          Serial.println(speed);
-#endif
-        } else
-          footDriveSpeed = speed;
-      } else  {
-        footDriveSpeed = speed;
-      }
-      turnnum = turnDirection;
-      if (abs(turnnum) > 5)
-      {
-        isFootMotorStopped = false;
-      }
-      currentMillis = millis();
-      if (footDriveSpeed != 0 || abs(turnnum) > 5)
-      {
-#ifdef SHADOW_DEBUG
-        Serial.print("Motor: FootSpeed: ");
+        Serial.print("RAMPING: ");
         Serial.println(footDriveSpeed);
-        Serial.print("\nTurnnum: ");
-        Serial.println(turnnum);
-        Serial.print("\nturnDirection: ");
-        Serial.println(turnDirection);
-        Serial.print("\nTime of command: ");
-        Serial.println(millis());
-#endif
-        ST->turn(turnnum * invertturnDirection);
-        ST->drive(footDriveSpeed);
-      } else
-      {
-        if (!isFootMotorStopped)
-        {
-          ST->stop();
-          isFootMotorStopped = true;
-          footDriveSpeed = 0;
-#ifdef SHADOW_DEBUG
-          Serial.print("\r\n***Foot Motor STOPPED***\r\n");
-#endif
-        }
+        Serial.print("Speed: ");
+        Serial.println(speed);
+        Serial.print("Turnnum: ");
+        Serial.println(turnnum);  
       }
-      return;
-    } else
+    }
+    else
+      footDriveSpeed = speed;
+  }
+  else if (footDriveSpeed > speed)
+  {
+    if ((footDriveSpeed - speed) > (ramping + 1))
     {
-      turnnum = turnDirection;
-      ST->drive(0);
-      ST->turn(turnnum * invertturnDirection);
-      previousFootMillis = currentMillis;
+      footDriveSpeed -= ramping;
+      #ifdef SHADOW_DEBUG
+        Serial.print("RAMPING: ");
+        Serial.println(footDriveSpeed);
+        Serial.print("Speed: ");
+        Serial.println(speed);
+        Serial.print("Turnnum: ");
+        Serial.println(turnnum);  
+      #endif
+    }
+    else
+      footDriveSpeed = speed;
+  }
+  else
+    footDriveSpeed = speed;
+    
+// Check footmotor and turndirection and verify its not stopped
+  turnnum = turnDirection;
+  currentMillis = millis();   // Mark the time
+  if ( abs(footDriveSpeed) != 0 || abs(turnnum) > 5)
+  {
+    isFootMotorStopped = false;
+    #ifdef SHADOW_DEBUG
+      Serial.print("Motor: FootSpeed: ");
+      Serial.println(footDriveSpeed);
+      Serial.print("\nturnDirection: ");
+      Serial.println(turnDirection);
+      Serial.print("Turnnum: ");
+      Serial.println(turnnum);
+      Serial.print("\nTime of command: ");
+      Serial.println(millis());
+      Serial.print("\nState: ");
+      Serial.println(R2state);
+    #endif
+    if (R2state == MovingFwd)             // Check to see if you are running forward, if so keep it the same
+    {
+      speed = speed;
+      if (isDebug)
+      {
+        Serial.print("State: ");
+        Serial.print(R2state); 
+        Serial.print(" LeftFront: ");
+        Serial.print(leftfront); 
+        Serial.print(" RightFront: ");
+        Serial.print(rightfront); 
+        Serial.print(" distance: ");
+        Serial.println(distance); 
+      }    
+    }
+  
+    else if (R2state == MovingBck)        // If the state machine is set to backwards, then reverse the speed.
+    {
+      speed = speed * -1;
+      if (isDebug)
+      {
+        Serial.print("State: ");
+        Serial.print(R2state); 
+        Serial.print(" LeftBack: ");
+        Serial.print(leftback); 
+        Serial.print(" RightBackt: ");
+        Serial.print(rightback); 
+        Serial.print(" distance: ");
+        Serial.println(distance); 
+      } 
+    }
+    ST->turn(turnnum * invertturnDirection);
+    ST->drive(footDriveSpeed);
+  } 
+  else
+  {
+    if (!isFootMotorStopped)
+    {
+      R2state = Stopped;
+      ST->stop();
+      isFootMotorStopped = true;
+      footDriveSpeed = 0;
+      #ifdef SHADOW_DEBUG
+          Serial.print("\r\nFoot Motor STOPPED...\r\n");
+      #endif
       return;
     }
-    return;
-  }                                                                 // end of automation check processing
-  return;
-}                                                                   // end of autoFootmotor drive
+  }
+} // end of autoFootmotor drive
 
 // =======================================================================================
 //           domeDrive Motor Control Section
@@ -2194,72 +2266,108 @@ void autodomeDrive()  {
 //    http://www.curiousmarc.com/dome-automation/marcduino-firmware/command-reference
 // =======================================================================================
 #ifdef VOICE
-void voicecontrol()  {
-  if (isPS3NavigatonInitialized)  {
-    if (voicecmd == 1)  {                           // Turn on AutoNavigation and go on Patrol command (Patrol)
-      autoNavigation = true;
-      state = stateMovingFwd;
-      Serial1.print(":SE14\r");                     // Full Awake Mode reset (panel close, random sound, holo movement, no holo lights)
-      voicecmd = -1;
-      if (isDebug)
-        Serial.println("Enable Automation\r\n");
-    }
-    if (voicecmd == 3)  {                           // Do you remember Vader
-      autoNavigation = false;
-      Serial1.print(":SE01\r");                     // Scream, with all panels open
-      state = stateStopped;
-      voicecmd = -1;
-    }
-    if (voicecmd == 5)  {                           // Do you remember Lea
-      autoNavigation = false;
-      Serial1.print(":$L\r");                       // Send command to play princess Lea message
-      state = stateStopped;
-      voicecmd = -1;
-    }
-    if (voicecmd == 6)  {                           // Do you remember C3PO
-      autoNavigation = false;
-      Serial1.print(":SE54\r");                     // Wave 2 (open progressively all panels, then close one by one)
-      state = stateStopped;
-      voicecmd = -1;
-    }
-    if (voicecmd == 8)  {                           // Open the Marcduino Panels (open panels)
-      autoNavigation = false;
-      Serial1.print(":OP00\r");                     // Send command to Open Panels to Marcduino
-      state = stateStopped;
-      voicecmd = -1;
-    }
-    if (voicecmd == 9)  {                           // Close the Marcduino Panels (close panels)
-      autoNavigation = false;
-      Serial1.print(":CL00\r");                     // Send Soft Close Panels to Marcduino
-      state = stateStopped;
-      voicecmd = -1;
-    }
-    if (voicecmd == 7)  {                           // Turn off AutoNavigation and stop (stay)
-      autoNavigation = false;
-      Serial1.print(":$2\r");                       // Send Sound Command for AutoNavigation Off
-      Serial1.print(":SE10\r");                     // Quite Mode reset (panel close, stop holos, stop sounds)
-      state = stateStopped;
-      voicecmd = -1;
-      if (isDebug)
-        Serial.println("Disable Automation\r\n");
-    }
-    if (voicecmd == 98)  {                          // Time out was recieved
-      // state = stateStopped;
-      Serial1.print(":SE13\r");                     // Mid Awake Mode reset (panel close, random sound, stop holos)
-      voicecmd = -1;
-      if (isDebug)
-        Serial.println("R2 Is no longer waiting for 2nd command\r\n");
-    }
-    if (voicecmd == 99)  {                          // R2 didnt understand the command
-      // state = stateStopped;
-      Serial1.print(":SE53\r");                     // Fast (Smirk) back and forth wave
-      voicecmd = -1;
-      if (isDebug)
-        Serial.println("R2 didnt understand the command\r\n");
-    }
-  } else
+void voicecontrol()  
+{
+  if (isPS3NavigatonInitialized)
+  {
+    if (autoNavigation)
+    {
+      if (voicecmd == 1)  {                           // Turn on AutoNavigation and go on Patrol command (Patrol)
+        R2mode = Patroling;                           // R2 mode is now Patrol
+        R2state = MovingFwd;                          // R2 initial state will be set to moving forward
+        Serial1.print(":SE14\r");                     // Full Awake Mode reset (panel close, random sound, holo movement, no holo lights)
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Go on Patrol\r\n");
+      }
+      else if (voicecmd == 2)  {                      // Do you remember Luke Skywalker
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":SE05\r");                     // Unknown
+        voicecmd = -1;
+      }
+      else if (voicecmd == 3)  {                      // Do you remember Vader
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":SE01\r");                     // Scream, with all panels open
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Vader\r\n");
+      }
+      else if (voicecmd == 5)  {                      // Do you remember Lea
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":$L\r");                       // Send command to play princess Lea message
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Lea\r\n");
+      }
+      else if (voicecmd == 6)  {                      // Do you remember C3PO
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":SE54\r");                     // Wave 2 (open progressively all panels, then close one by one)
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("3PO\r\n");
+      }
+      else if (voicecmd == 8)  {                      // Open the Marcduino Panels (open panels)
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":OP00\r");                     // Send command to Open Panels to Marcduino
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Open Panels\r\n");
+      }
+      else if (voicecmd == 9)  {                      // Close the Marcduino Panels (close panels)
+        R2state = Stopped;                            // R2 Should be standing still
+        Serial1.print(":CL00\r");                     // Send Soft Close Panels to Marcduino
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Close Panels\r\n");
+      }
+      else if (voicecmd == 7)  {                      // Turn off AutoNavigation and stop (stay)
+        R2state = Stopped;                            // Set the state to stopped
+        R2mode = None;
+        Serial1.print(":$2\r");                       // Send Sound Command for AutoNavigation Off
+        Serial1.print(":SE10\r");                     // Quite Mode reset (panel close, stop holos, stop sounds)
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Stay... Quiet mode\r\n");
+      }
+      else if (voicecmd == 10)  {                     // Tell R2 to backup
+        R2state = MovingBck;                          // Set the state to MovingBck
+        R2mode = Aware;
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Moving Backwards\r\n");
+      }
+      else if (voicecmd == 11)  {                     // Tell R2 to go forward
+        R2state = MovingFwd;                          // Set the state to MovingFwd
+        R2mode = Aware;
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Moving Forwards\r\n");
+      }
+      else if (voicecmd == 12)  {                     // Tell R2 to Go for Walk
+        R2state = MovingFwd;                          // Set the state to MovingFwd
+        R2mode = Waypoint;                            // R2 mode is now Waypoint: walk
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("Waypoint: Walk around block\r\n");
+      }
+      else if (voicecmd == 98)  
+      {                                               // Time out was recieved
+        Serial1.print(":SE13\r");                     // Mid Awake Mode reset (panel close, random sound, stop holos)
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("R2 Is no longer waiting for 2nd command\r\n");
+      }
+      else if (voicecmd == 99)  
+      {                                               // R2 didnt understand the command
+        Serial1.print(":SE53\r");                     // Fast (Smirk) back and forth wave
+        voicecmd = -1;
+        if (isDebug)
+          Serial.println("R2 didnt understand the command\r\n");
+      }
+    } 
+    else
     return;
-  return;
+  }
 }
 #endif
 
@@ -2269,7 +2377,6 @@ void voicecontrol()  {
 
 void ps3ToggleSettings(PS3BT* myPS3 = PS3NavFoot)
 {
-
   // enable / disable drive stick
   if (myPS3->getButtonPress(PS) && myPS3->getButtonClick(CROSS))
   {
@@ -2344,40 +2451,45 @@ void ps3ToggleSettings(PS3BT* myPS3 = PS3NavFoot)
 #ifdef COLLISION
   // Enable Disable Auto Navigation and Dome Automation - updated on 9/11/2015 to toggle mode SEE BELOW rewritten code
   if (myPS3->getButtonPress(L2) && myPS3->getButtonClick(CROSS)) {
-    if (autoNavigation == true) {
-      //domeAutomation = false;
+    if (autoNavigation == true) 
+    {
       autoNavigation = false;
-      state = stateStopped;
-#ifdef SHADOW_DEBUG
-      Serial.println("Stop Automation Off\r\n");
-#endif
-    } else {
+      speed = -25;
+      R2state = Stopped;
+      if (isDebug)
+        Serial.println("Stop Automation\r\n");
+    } 
+    else 
+    {
       autoNavigation = true;
-      // domeAutomation = true;
-#ifdef SHADOW_DEBUG
-      Serial.println("Starting Automation On\r\n");
-#endif
+      if (isDebug)
+        Serial.println("Starting Automation\r\n");
     }
   }
 #endif
 
 #ifdef USE_GPS
   // Enable Disable GPS Waypoint Seeking - updated on 9/24/2015 to toggle mode
-  if (myPS3->getButtonPress(L2) && myPS3->getButtonClick(CROSS) && myPS3->getButtonClick(L1)) {
-    if (Waypointenabled == true) {
-      Waypointenabled = false;
-#ifdef SHADOW_DEBUG
-      Serial.print("GPS Off\r\n");
-      Serial.print(Waypointenabled);
-      Serial.println("");
-#endif
-    } else {
-      Waypointenabled = true;
-#ifdef SHADOW_DEBUG
+  if (myPS3->getButtonPress(L2) && myPS3->getButtonClick(CROSS) && myPS3->getButtonClick(L1)) 
+  {
+    if (R2mode == Waypoint)
+    {
+      R2mode = None;
+      if (isDebug)
+      {
+        Serial.print("GPS Off\r\n");
+        Serial.print(Waypointenabled);
+        Serial.println(""); 
+      }
+    } 
+    else 
+    {
+      R2mode = Waypoint;
+      if (isDebug)
+      {
       Serial.print("GPS On\r\n");
-      Serial.print(Waypointenabled);
-      Serial.println("");
-#endif
+      Serial.println(Waypointenabled);
+      }
     }
   }
 #endif
